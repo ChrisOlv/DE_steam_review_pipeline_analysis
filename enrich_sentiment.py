@@ -57,10 +57,19 @@ def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
     token = os.getenv("MOTHERDUCK_TOKEN")
     if not token:
         raise RuntimeError("MOTHERDUCK_TOKEN is not set in environment or .env")
-    conn = duckdb.connect(f"md:?motherduck_token={token}")
-    conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
-    conn.execute(f"USE {db_name}")
-    return conn
+    # Sanitize token (avoid gRPC metadata issues with illegal header values)
+    token = token.strip()
+    os.environ["MOTHERDUCK_TOKEN"] = token
+    try:
+        # Connect via md: using env token rather than query param
+        conn = duckdb.connect("md:")
+        conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+        conn.execute(f"USE {db_name}")
+        return conn
+    except Exception as e:
+        logging.error(f"MotherDuck connection failed: {e}")
+        raise
+
 
 def get_azure_client() -> AzureOpenAI:
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
