@@ -671,7 +671,7 @@ def main():
         sarcasm_flag, humor_flag, spam_flag, coherence_score = get_tone_quality_flags(client, deployment, norm_text)
         bug_report, bug_type, steps_hint = get_bug_info(client, deployment, norm_text)
         feature_request, requested_features, suggestion_text = get_feature_request_bonus(client, deployment, norm_text)
-                nps_category, emotion_primary = get_nps_and_emotion(client, deployment, norm_text)
+        nps_category, emotion_primary = get_nps_and_emotion(client, deployment, norm_text)
         playtime_bucket = infer_playtime_bucket(client, deployment, norm_text)
         reviewer_experience_level = infer_reviewer_experience_level(client, deployment, norm_text)
 
