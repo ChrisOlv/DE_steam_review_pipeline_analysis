@@ -1,0 +1,66 @@
+name: LLM Enrichment (Steam Reviews)
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"  # Every 4 hours
+  workflow_dispatch:
+
+concurrency:
+  group: llm-enrichment
+  cancel-in-progress: true
+
+jobs:
+  run-enrichment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Optional: set these if you want to override script defaults
+      MD_DB_NAME: ${{ secrets.MD_DB_NAME }}
+      LOG_LEVEL: INFO
+      LIMIT: "200"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install duckdb python-dotenv openai
+          fi
+
+      - name: Run enrichment
+        shell: bash
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+        run: |
+          set -euo pipefail
+          echo "Starting enrichment at $(date -u)"
+          python enrich_sentiment.py \
+            --db-name "${MD_DB_NAME:-steam_analytics}" \
+            --limit "${LIMIT}" \
+            --log-level "${LOG_LEVEL}"
+          echo "Finished enrichment at $(date -u)"
+
+      - name: Upload logs (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enrichment-logs
+          path: |
+            **/*.log
