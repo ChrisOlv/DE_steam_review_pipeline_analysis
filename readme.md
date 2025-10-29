@@ -42,8 +42,9 @@ This repository contains a pipeline for ingesting, enriching, and analyzing Stea
 
 1. **Clone the Repository**:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/ChrisOlv/DE_steam_review_pipeline_analysis.git
    cd <repository-name>
+   Create a venv
    ```
 
 2. **Install Dependencies**:
@@ -53,7 +54,7 @@ This repository contains a pipeline for ingesting, enriching, and analyzing Stea
    ```
 
 3. **Set Up Environment Variables**:
-   Create a `.env` file in the root directory with the following variables:
+   Create a `.env` file in the root directory with the following variables (for new dev purposes only)
    ```plaintext
    MOTHERDUCK_TOKEN=<your_motherduck_token>
    AZURE_OPENAI_ENDPOINT=<your_azure_openai_endpoint>
@@ -63,13 +64,18 @@ This repository contains a pipeline for ingesting, enriching, and analyzing Stea
    MD_DB_NAME=<your_database_name>  # Optional, defaults to steam_analytics
    ```
 
+## dataviz (temporary)
+Download and install Power BI (https://www.microsoft.com/fr-fr/download/details.aspx?id=58494)
+You will need to use your Github token and email adress in order to connect to source files
+
+
 ## GitHub Actions
 
 The GitHub Actions workflow is defined in `.github/workflows/llm_enrichment.yml`. It includes two jobs:
 - **Ingest Steam Data**: Runs `steam_ingest.py` to fetch and store new reviews.
 - **Run Enrichment**: Runs `enrich_sentiment.py` to analyze and enrich the reviews, followed by exporting the results to Parquet files.
 
-The workflow is scheduled to run every four hours and can also be triggered manually.
+The workflow is scheduled to run every 1hour and can also be triggered manually.
 
 ## Contributing
 

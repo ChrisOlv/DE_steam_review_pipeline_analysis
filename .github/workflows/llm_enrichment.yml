@@ -2,7 +2,7 @@ name: LLM Enrichment (Steam Reviews)
 
 on:
   schedule:
-    - cron: "0 */4 * * *"  # Every 4 hours
+    - cron: "0 */1 * * *"  # Every 1 hours
   workflow_dispatch:
 
 concurrency:

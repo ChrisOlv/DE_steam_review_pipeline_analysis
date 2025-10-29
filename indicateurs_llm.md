@@ -1,3 +1,5 @@
+# Liste des indicateurs ajoutés via LLM
+
 [Core set (prioritaire)]
 sentiment_label: positive | neutral | negative
 sentiment_score: 0..1 (confiance/force du sentiment global)
