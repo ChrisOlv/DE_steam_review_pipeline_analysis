@@ -7,7 +7,7 @@ import duckdb
 from dotenv import load_dotenv
 from typing import Dict, Iterator, Optional, List
 
-load_dotenv()  # charge .env (MOTHERDUCK_TOKEN, MD_DB_NAME)
+load_dotenv()  
 
 BASE_URL = "https://store.steampowered.com/appreviews/{app_id}"
 SOURCE = "steam_3697560"
@@ -17,11 +17,11 @@ def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
     if not token:
         raise RuntimeError("MOTHERDUCK_TOKEN is not set in the environment or .env")
 
-    token = token.strip()  # Ensure no accidental whitespace in the token
+    token = token.strip()  
     os.environ["MOTHERDUCK_TOKEN"] = token
 
     try:
-        conn = duckdb.connect("md:")  # Use "md:" to rely on token in env
+        conn = duckdb.connect("md:")  
         conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
         conn.execute(f"USE {db_name}")
         return conn
@@ -30,7 +30,7 @@ def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
         raise
 
 def init_schema(conn: duckdb.DuckDBPyConnection):
-    # Tables minimales nécessaires
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS raw_reviews (
@@ -72,7 +72,7 @@ def get_last_ingest_ts(conn: duckdb.DuckDBPyConnection, source: str) -> Optional
     return res[0] if res else None
 
 def update_ingest_state(conn: duckdb.DuckDBPyConnection, source: str, last_ts: int):
-    # DuckDB ne supporte pas toujours ON CONFLICT, on utilise MERGE-like via UPSERT pattern
+
     existing = conn.execute("SELECT 1 FROM ingest_state WHERE source = ?", [source]).fetchone()
     if existing:
         conn.execute("UPDATE ingest_state SET last_review_ts = ?, last_run_at = NOW() WHERE source = ?", [last_ts, source])

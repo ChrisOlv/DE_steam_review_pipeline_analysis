@@ -537,10 +537,73 @@ def insert_enrichment(
     ).fetchone()
 
     if row is None:
-        conn.execute(
-            "INSERT INTO llm_enrichment (recommendationid, sentiment_label, sentiment_score, summary_10_words, tl_dr, keywords, themes, pros, cons, aspect_scores, feature_requests, language_detected, normalized_text_en, quote_highlight, toxicity_score, sarcasm_flag, humor_flag, spam_flag, coherence_score, bug_report, bug_type, steps_hint, feature_request, requested_features, suggestion_text, playtime_bucket, reviewer_experience_level, nps_category, emotion_primary, pertinence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [rec_id, label, score, summary_10_words, tl_dr, keywords_json, themes_json, pros_json, cons_json, aspect_scores_json, feature_requests_json, language_detected, normalized_text_en, quote_highlight, toxicity_score, sarcasm_flag, humor_flag, spam_flag, coherence_score, bug_report, bug_type, steps_hint, feature_request, requested_features_json, suggestion_text, playtime_bucket, reviewer_experience_level, nps_category, emotion_primary, pertinence]
-        )
+        columns = [
+            "recommendationid",
+            "sentiment_label",
+            "sentiment_score",
+            "summary_10_words",
+            "tl_dr",
+            "keywords",
+            "themes",
+            "pros",
+            "cons",
+            "aspect_scores",
+            "feature_requests",
+            "language_detected",
+            "normalized_text_en",
+            "quote_highlight",
+            "toxicity_score",
+            "sarcasm_flag",
+            "humor_flag",
+            "spam_flag",
+            "coherence_score",
+            "bug_report",
+            "bug_type",
+            "steps_hint",
+            "feature_request",
+            "requested_features",
+            "suggestion_text",
+            "playtime_bucket",
+            "reviewer_experience_level",
+            "nps_category",
+            "emotion_primary",
+            "pertinence",
+        ]
+        placeholders = ", ".join(["?"] * len(columns))
+        sql = f"INSERT INTO llm_enrichment ({', '.join(columns)}) VALUES ({placeholders})"
+        params = [
+            rec_id,
+            label,
+            score,
+            summary_10_words,
+            tl_dr,
+            keywords_json,
+            themes_json,
+            pros_json,
+            cons_json,
+            aspect_scores_json,
+            feature_requests_json,
+            language_detected,
+            normalized_text_en,
+            quote_highlight,
+            toxicity_score,
+            sarcasm_flag,
+            humor_flag,
+            spam_flag,
+            coherence_score,
+            bug_report,
+            bug_type,
+            steps_hint,
+            feature_request,
+            requested_features_json,
+            suggestion_text,
+            playtime_bucket,
+            reviewer_experience_level,
+            nps_category,
+            emotion_primary,
+            pertinence,
+        ]
+        conn.execute(sql, params)
         return "inserted"
     else:
         cols = [
@@ -575,10 +638,72 @@ def insert_enrichment(
             ("pertinence", row[28], pertinence),
         ]
         if force:
-            conn.execute(
-                "UPDATE llm_enrichment SET sentiment_label = ?, sentiment_score = ?, summary_10_words = ?, tl_dr = ?, keywords = ?, themes = ?, pros = ?, cons = ?, aspect_scores = ?, feature_requests = ?, language_detected = ?, normalized_text_en = ?, quote_highlight = ?, toxicity_score = ?, sarcasm_flag = ?, humor_flag = ?, spam_flag = ?, coherence_score = ?, bug_report = ?, bug_type = ?, steps_hint = ?, feature_request = ?, requested_features = ?, suggestion_text = ?, playtime_bucket = ?, reviewer_experience_level = ?, nps_category = ?, emotion_primary = ?, pertinence = ? WHERE recommendationid = ?",
-                [label, score, summary_10_words, tl_dr, keywords_json, themes_json, pros_json, cons_json, aspect_scores_json, feature_requests_json, language_detected, normalized_text_en, quote_highlight, toxicity_score, sarcasm_flag, humor_flag, spam_flag, coherence_score, bug_report, bug_type, steps_hint, feature_request, requested_features_json, suggestion_text, playtime_bucket, reviewer_experience_level, nps_category, emotion_primary, pertinence, rec_id]
-            )
+            upd_cols = [
+                "sentiment_label",
+                "sentiment_score",
+                "summary_10_words",
+                "tl_dr",
+                "keywords",
+                "themes",
+                "pros",
+                "cons",
+                "aspect_scores",
+                "feature_requests",
+                "language_detected",
+                "normalized_text_en",
+                "quote_highlight",
+                "toxicity_score",
+                "sarcasm_flag",
+                "humor_flag",
+                "spam_flag",
+                "coherence_score",
+                "bug_report",
+                "bug_type",
+                "steps_hint",
+                "feature_request",
+                "requested_features",
+                "suggestion_text",
+                "playtime_bucket",
+                "reviewer_experience_level",
+                "nps_category",
+                "emotion_primary",
+                "pertinence",
+            ]
+            set_clause = ", ".join([f"{c} = ?" for c in upd_cols])
+            sql = f"UPDATE llm_enrichment SET {set_clause} WHERE recommendationid = ?"
+            params = [
+                label,
+                score,
+                summary_10_words,
+                tl_dr,
+                keywords_json,
+                themes_json,
+                pros_json,
+                cons_json,
+                aspect_scores_json,
+                feature_requests_json,
+                language_detected,
+                normalized_text_en,
+                quote_highlight,
+                toxicity_score,
+                sarcasm_flag,
+                humor_flag,
+                spam_flag,
+                coherence_score,
+                bug_report,
+                bug_type,
+                steps_hint,
+                feature_request,
+                requested_features_json,
+                suggestion_text,
+                playtime_bucket,
+                reviewer_experience_level,
+                nps_category,
+                emotion_primary,
+                pertinence,
+                rec_id,
+            ]
+            conn.execute(sql, params)
             return "overwritten"
         else:
             updated_any = False
@@ -590,6 +715,7 @@ def insert_enrichment(
                     )
                     updated_any = True
             return "updated" if updated_any else "skipped"
+
 
 
 
