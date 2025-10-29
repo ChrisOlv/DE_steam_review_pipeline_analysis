@@ -470,7 +470,6 @@ def fetch_pending_reviews(conn: duckdb.DuckDBPyConnection, limit: int) -> List[T
             e.feature_requests IS NULL OR
             e.language_detected IS NULL OR
             e.normalized_text_en IS NULL OR
-            -- bonus set
             e.quote_highlight IS NULL OR
             e.toxicity_score IS NULL OR
             e.sarcasm_flag IS NULL OR
@@ -486,7 +485,7 @@ def fetch_pending_reviews(conn: duckdb.DuckDBPyConnection, limit: int) -> List[T
             e.playtime_bucket IS NULL OR
             e.reviewer_experience_level IS NULL OR
             e.nps_category IS NULL OR
-                        e.emotion_primary IS NULL OR
+            e.emotion_primary IS NULL OR
             e.pertinence IS NULL
           )
         ORDER BY r.timestamp_created DESC
