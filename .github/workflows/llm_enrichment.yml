@@ -9,6 +9,9 @@ concurrency:
   group: llm-enrichment
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   ingest-steam-data:
     name: Ingest Steam Data
@@ -98,6 +101,12 @@ jobs:
             --log-level "${LOG_LEVEL}"
           echo "Finished enrichment at $(date -u)"
 
+      - name: Clean dataviz outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f dataviz/*.parquet dataviz/*.json dataviz/*.csv || true
+
       - name: Export data as parquet
         shell: bash
         env:
@@ -111,6 +120,20 @@ jobs:
             --log-level "${LOG_LEVEL}"
           echo "Export complete at $(date -u)"
 
+      - name: Commit and push dataviz outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dataviz/*.parquet dataviz/*.json dataviz/*.csv || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update dataviz exports [skip ci]"
+            git push
+          fi
+
       - name: Upload dataviz artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -119,3 +142,4 @@ jobs:
             dataviz/*.parquet
             dataviz/*.json
             dataviz/*.csv
+          if-no-files-found: warn
