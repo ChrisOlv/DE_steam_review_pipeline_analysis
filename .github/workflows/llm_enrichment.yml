@@ -10,7 +10,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ingest-steam-data:
+    name: Ingest Steam Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      MD_DB_NAME: ${{ secrets.MD_DB_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install python-dotenv duckdb requests
+          fi
+
+      - name: Run Steam Ingestion
+        shell: bash
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Starting Steam ingestion at $(date -u)"
+          python steam_ingest.py \
+            --db-name "${MD_DB_NAME:-steam_analytics}"
+          echo "Finished ingestion at $(date -u)"
+
   run-enrichment:
+    needs: ingest-steam-data
+    name: Enrich Reviews
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -61,10 +102,6 @@ jobs:
         shell: bash
         env:
           MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
-          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
         run: |
           set -euo pipefail
           echo "Exporting databases to parquet at $(date -u)"
@@ -73,11 +110,3 @@ jobs:
             --out-dir "dataviz" \
             --log-level "${LOG_LEVEL}"
           echo "Export complete at $(date -u)"
-
-      - name: Upload logs (optional)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: enrichment-logs
-          path: |
-            **/*.log
