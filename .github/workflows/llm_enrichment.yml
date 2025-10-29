@@ -57,6 +57,23 @@ jobs:
             --log-level "${LOG_LEVEL}"
           echo "Finished enrichment at $(date -u)"
 
+      - name: Export data as parquet
+        shell: bash
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+        run: |
+          set -euo pipefail
+          echo "Exporting databases to parquet at $(date -u)"
+          python export_dataviz.py \
+            --db-name "${MD_DB_NAME:-steam_analytics}" \
+            --out-dir "dataviz" \
+            --log-level "${LOG_LEVEL}"
+          echo "Export complete at $(date -u)"
+
       - name: Upload logs (optional)
         if: always()
         uses: actions/upload-artifact@v4
