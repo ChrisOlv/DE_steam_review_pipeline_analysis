@@ -110,3 +110,12 @@ jobs:
             --out-dir "dataviz" \
             --log-level "${LOG_LEVEL}"
           echo "Export complete at $(date -u)"
+
+      - name: Upload dataviz artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dataviz-parquet
+          path: |
+            dataviz/*.parquet
+            dataviz/*.json
+            dataviz/*.csv
