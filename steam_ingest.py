@@ -16,10 +16,18 @@ def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
     token = os.getenv("MOTHERDUCK_TOKEN")
     if not token:
         raise RuntimeError("MOTHERDUCK_TOKEN is not set in the environment or .env")
-    conn = duckdb.connect(f"md:?motherduck_token={token}")
-    conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
-    conn.execute(f"USE {db_name}")
-    return conn
+
+    token = token.strip()  # Ensure no accidental whitespace in the token
+    os.environ["MOTHERDUCK_TOKEN"] = token
+
+    try:
+        conn = duckdb.connect("md:")  # Use "md:" to rely on token in env
+        conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+        conn.execute(f"USE {db_name}")
+        return conn
+    except Exception as e:
+        logging.error(f"MotherDuck connection failed: {e}")
+        raise
 
 def init_schema(conn: duckdb.DuckDBPyConnection):
     # Tables minimales nécessaires
