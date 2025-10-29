@@ -62,9 +62,9 @@ def main():
     total_exported = 0
     summary = []
     exports = {
-        "ingest_state": os.path.join(args.out_dir, "ingest_state.parquet"),
-        "llm_enrichment": os.path.join(args.out_dir, "llm_enrichment.parquet"),
-        "raw_reviews": os.path.join(args.out_dir, "raw_reviews.parquet"),
+        "ingest_state": os.path.join(args.out_dir, "ingest_state2.parquet"), #test ajout 2
+        "llm_enrichment": os.path.join(args.out_dir, "llm_enrichment2.parquet"),
+        "raw_reviews": os.path.join(args.out_dir, "raw_reviews2.parquet"),
     }
 
     for table, path in exports.items():
