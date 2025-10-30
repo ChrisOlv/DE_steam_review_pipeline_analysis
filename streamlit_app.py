@@ -82,8 +82,9 @@ def load_full_data():
     """
     
     df = conn.execute(query).df()
-    df["date_created"] = df["date_created"].dt.date  # Convert date_created to pure date
-    df["date_updated"] = df["date_updated"].dt.date  # Convert date_created to pure date
+    # convertion des datatypes
+    df["date_created"] = df["date_created"].dt.date  
+    df["date_updated"] = df["date_updated"].dt.date 
     return df
 
 data = load_full_data()  # Charge toute la table
@@ -152,13 +153,22 @@ def filtered_reviews_table(data):
 
     st.altair_chart(chart, use_container_width=True)
 
-    # Affichage du tableau
-    st.dataframe(
+        # Affichage du tableau (avec word-wrap sur le texte traduit)
+    st.data_editor(
         filtered_data.sort_values(by="date_updated", ascending=False),
         use_container_width=True,
         height=800,
-        hide_index=True
+        hide_index=True,
+        disabled=True,
+        column_config={
+            "llm_review_translated": st.column_config.TextColumn(
+                "Avis traduit",
+                help="Avis traduit en anglais si langue <> en, fr",
+                width="large"
+            )
+        }
     )
+
 
 filtered_reviews_table(data)
 
