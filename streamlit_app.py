@@ -101,6 +101,88 @@ Le dépôt complet est disponible ici : [repository GitHub](https://github.com/C
 )
 
 
+# Carte "Nombre de reviews" avec courbe de tendance en fond dans la première colonne
+cols_top = st.columns(6)
+with cols_top[0]:
+    st.subheader("Nombre de reviews")
+    trend_df = (
+        data.groupby("date_created").size().reset_index(name="count").sort_values("date_created")
+    )
+
+    if not trend_df.empty:
+        max_count = int(trend_df["count"].max())
+        label_df = pd.DataFrame({
+            "label": [f"{len(data):,}"],
+            "label_x": [trend_df["date_created"].min()],
+            "label_y": [max_count * 0.95]
+        })
+
+        area = alt.Chart(trend_df).mark_area(opacity=0.25, color="#4c78a8").encode(
+            x=alt.X("date_created:T", axis=None),
+            y=alt.Y("count:Q", axis=None)
+        )
+        line = alt.Chart(trend_df).mark_line(color="#4c78a8", strokeWidth=2).encode(
+            x="date_created:T",
+            y="count:Q"
+        )
+        label = alt.Chart(label_df).mark_text(
+            fontSize=28, fontWeight="bold", color="black", align="left"
+        ).encode(
+            x="label_x:T",
+            y="label_y:Q",
+            text="label:N"
+        )
+
+        card = (area + line + label).properties(height=120)
+        st.altair_chart(card, use_container_width=True)
+    else:
+        st.metric("Nombre de reviews", value=f"{len(data):,}")
+
+with cols_top[1]:
+    st.subheader("% recommandé")
+    rec_trend_df = (
+        data.groupby("date_created").agg(
+            total=("recommend_the_game", "size"),
+            recommended=("recommend_the_game", "sum")
+        ).reset_index().sort_values("date_created")
+    )
+
+    percent_total = ((data["recommend_the_game"] == True).sum() / len(data) * 100) if len(data) > 0 else 0
+
+    if not rec_trend_df.empty:
+        rec_trend_df["percent"] = rec_trend_df["recommended"] / rec_trend_df["total"] * 100
+        max_percent = float(rec_trend_df["percent"].max())
+        label_df = pd.DataFrame({
+            "label": [f"{percent_total:.1f}%"],
+            "label_x": [rec_trend_df["date_created"].min()],
+            "label_y": [max_percent * 0.95 if max_percent > 0 else 0]
+        })
+
+        area = alt.Chart(rec_trend_df).mark_area(opacity=0.25, color="#72b67a").encode(
+            x=alt.X("date_created:T", axis=None),
+            y=alt.Y("percent:Q", axis=None, scale=alt.Scale(domain=[0, 100]))
+        )
+        line = alt.Chart(rec_trend_df).mark_line(color="#72b67a", strokeWidth=2).encode(
+            x="date_created:T",
+            y="percent:Q"
+        )
+        label = alt.Chart(label_df).mark_text(
+            fontSize=28, fontWeight="bold", color="black", align="left"
+        ).encode(
+            x="label_x:T",
+            y="label_y:Q",
+            text="label:N"
+        )
+
+        card2 = (area + line + label).properties(height=120)
+        st.altair_chart(card2, use_container_width=True)
+    else:
+        st.metric("Pourcentage recommandé", value=f"{percent_total:.1f}%")
+
+
+
+
+
 
 # Tableau interactif avec filtres amélioré
 def filtered_reviews_table(data):
@@ -140,18 +222,43 @@ def filtered_reviews_table(data):
     with m2:
         st.metric("Pourcentage recommandé", value=f"{recommend_percent:.1f}%")
 
-    # Bar chart empilé: avis par date et recommandation
+            # Bar chart empilé: avis par date et recommandation + à droite: répartition par émotion
     st.subheader("Évolution des avis par date et recommandation")
-    time_grain = st.selectbox("Granularité temporelle", options=["Mois","Jour"], index=1)
-    time_unit = "yearmonth" if time_grain == "Mois" else "yearmonthdate"
+    col_chart, col_emotion = st.columns([2, 1])
 
-    chart = alt.Chart(filtered_data).mark_bar().encode(
-        x=alt.X(f"{time_unit}(date_created):T", title="Date"),
-        y=alt.Y("count():Q", title="Nombre d'avis"),
-        color=alt.Color("recommend_the_game:N", title="Recommande le jeu")
-    ).properties(width=900, height=350)
+    with col_chart:
+        time_grain = st.selectbox("Granularité temporelle", options=["Mois","Jour"], index=1)
+        time_unit = "yearmonth" if time_grain == "Mois" else "yearmonthdate"
 
-    st.altair_chart(chart, use_container_width=True)
+        chart = alt.Chart(filtered_data).mark_bar().encode(
+            x=alt.X(f"{time_unit}(date_created):T", title=None),
+            y=alt.Y("count():Q", title=None),
+            color=alt.Color("recommend_the_game:N", title="Recommande le jeu")
+        ).properties(height=350)
+
+        st.altair_chart(chart, use_container_width=True)
+
+    with col_emotion:
+        st.subheader("Répartition des avis par émotion")
+        bars = alt.Chart(filtered_data).mark_bar().encode(
+            y=alt.Y("llm_emotion:N", title=None, sort="-x"),
+            x=alt.X("count():Q", title=None),
+            color=alt.Color("llm_emotion:N", legend=None)
+        )
+        labels = alt.Chart(filtered_data).mark_text(
+            align="left",
+            dx=3,
+            color="black"
+        ).encode(
+            y=alt.Y("llm_emotion:N", sort="-x"),
+            x=alt.X("count():Q"),
+            text=alt.Text("count():Q", format=",d")
+        )
+        emotion_chart = (bars + labels).properties(height=350)
+
+        st.altair_chart(emotion_chart, use_container_width=True)
+
+
 
         # Affichage du tableau (avec word-wrap sur le texte traduit)
     st.data_editor(
