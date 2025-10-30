@@ -102,15 +102,109 @@ Le dépôt complet est disponible ici : [repository GitHub](https://github.com/C
 )
 
 
+# Helpers
+def _safe_parse_list_cell(cell):
+    try:
+        if pd.isna(cell):
+            return []
+        if isinstance(cell, list):
+            return [str(x) for x in cell]
+        # list stored as string → try to eval safely
+        import ast
+        parsed = ast.literal_eval(str(cell))
+        return [str(x) for x in parsed] if isinstance(parsed, (list, tuple)) else []
+    except Exception:
+        return []
+
+def _explode_counts(df: pd.DataFrame, col: str, top_n: int = 12) -> pd.DataFrame:
+    items = []
+    if col in df.columns:
+        for vals in df[col].apply(_safe_parse_list_cell).tolist():
+            items.extend(vals)
+    counts = pd.Series(items, dtype="object").value_counts().reset_index()
+    counts.columns = [col, "count"]
+    return counts.head(top_n)
+
+def _parse_llm_score_mean(df: pd.DataFrame) -> pd.DataFrame:
+    # Parse JSON-like score dict per row, compute mean per aspect
+    import json
+    aspects_accum = {}
+    counts = {}
+    if "llm_score" not in df.columns:
+        return pd.DataFrame({"aspect": [], "score": []})
+    for cell in df["llm_score"].fillna("{}"):
+        try:
+            if isinstance(cell, dict):
+                d = cell
+            else:
+                d = json.loads(str(cell))
+            for k, v in d.items():
+                try:
+                    v_float = float(v)
+                except Exception:
+                    continue
+                aspects_accum[k] = aspects_accum.get(k, 0.0) + v_float
+                counts[k] = counts.get(k, 0) + 1
+        except Exception:
+            continue
+    rows = []
+    for k in aspects_accum:
+        if counts.get(k, 0) > 0:
+            rows.append({"aspect": str(k), "score": aspects_accum[k] / counts[k]})
+    return pd.DataFrame(rows).sort_values("aspect")
+
 # Carte "Nombre de reviews" avec courbe de tendance en fond dans la première colonne
 cols_top = st.columns(6)
 # Sidebar : filters
 with st.sidebar:
     st.header("Chart parameters ⚙️")
+    # Filtres rapides existants
     bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
     recommend_only = st.checkbox("Avis positifs uniquement")
     purchased_only = st.checkbox("Avis avec achat uniquement")
     reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
+
+    st.divider()
+    st.subheader("Filtres avancés")
+
+    # Plage de dates (création)
+    min_date = pd.to_datetime(data["date_created"]).min().date() if len(data) else None
+    max_date = pd.to_datetime(data["date_created"]).max().date() if len(data) else None
+    date_range = st.date_input(
+        "Période (date de création)",
+        value=(min_date, max_date) if min_date and max_date else None,
+        min_value=min_date,
+        max_value=max_date,
+        format="YYYY-MM-DD"
+    )
+
+    # Langues
+    languages = sorted([str(x) for x in data["language"].dropna().unique().tolist()])
+    selected_languages = st.multiselect(
+        "Langues",
+        options=languages,
+        default=languages
+    )
+
+    # Scores
+    sentiment_min, sentiment_max = st.slider(
+        "Score de sentiment (LLM)", 0.0, 1.0, (0.0, 1.0), 0.01
+    )
+    tox_min, tox_max = st.slider(
+        "Score de toxicité (LLM)", 0.0, 1.0, (0.0, 1.0), 0.01
+    )
+
+    # Drapeaux LLM
+    only_feature_req = st.checkbox("Inclure uniquement les demandes de fonctionnalités (LLM)")
+    only_pertinent = st.checkbox("Avis jugés pertinents (LLM)")
+    exclude_spam = st.checkbox("Exclure les avis flaggés spam (LLM)")
+
+    # Recherche texte
+    search_query = st.text_input("Recherche texte (original + traduit)")
+
+    # Espace export
+    st.divider()
+    st.caption("Exports du jeu de données filtré")
 
 
 # Appliquer les filtres globalement
@@ -123,6 +217,51 @@ if purchased_only:
     filtered_data = filtered_data[filtered_data["received_for_free"] == False]
 if reviewer_catalog:
     filtered_data = filtered_data[filtered_data["author_num_games_owned"] >= 1]
+
+# Appliquer filtres avancés
+try:
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2 and all(date_range):
+        start_date, end_date = date_range
+        filtered_data = filtered_data[(filtered_data["date_created"] >= start_date) & (filtered_data["date_created"] <= end_date)]
+except Exception:
+    pass
+
+if selected_languages:
+    filtered_data = filtered_data[filtered_data["language"].astype(str).isin(selected_languages)]
+
+filtered_data = filtered_data[
+    (filtered_data["llm_sentiment_score"].fillna(0.0) >= sentiment_min)
+    & (filtered_data["llm_sentiment_score"].fillna(0.0) <= sentiment_max)
+]
+
+filtered_data = filtered_data[
+    (filtered_data["llm_toxicity_score"].fillna(0.0) >= tox_min)
+    & (filtered_data["llm_toxicity_score"].fillna(0.0) <= tox_max)
+]
+
+if only_feature_req:
+    filtered_data = filtered_data[filtered_data["llm_feature_requested_flag"] == True]
+if only_pertinent:
+    filtered_data = filtered_data[filtered_data["llm_review_pertinence_flag"] == True]
+if exclude_spam:
+    filtered_data = filtered_data[filtered_data["llm_spam_flag"] != True]
+
+if search_query:
+    q = str(search_query).strip()
+    if q:
+        mask = (
+            filtered_data["review"].astype(str).str.contains(q, case=False, na=False)
+            | filtered_data["llm_review_translated"].astype(str).str.contains(q, case=False, na=False)
+        )
+        filtered_data = filtered_data[mask]
+
+# Afficher le nombre de lignes et proposer l'export (dans la sidebar)
+with st.sidebar:
+    st.metric("Lignes filtrées", value=f"{len(filtered_data):,}")
+    csv_bytes = filtered_data.to_csv(index=False).encode("utf-8")
+    st.download_button("Télécharger CSV", data=csv_bytes, file_name="steam_reviews_filtered.csv", mime="text/csv")
+    jsonl_str = filtered_data.to_json(orient="records", lines=True, force_ascii=False)
+    st.download_button("Télécharger JSONL", data=jsonl_str, file_name="steam_reviews_filtered.jsonl", mime="application/json")
 
 with cols_top[0]:
     st.subheader("Nombre de reviews")
@@ -203,6 +342,66 @@ with cols_top[1]:
 
 
 
+
+# Section: Thématiques, émotions, aspects
+st.subheader("Thématiques et qualité perçue")
+g1, g2, g3 = st.columns([2, 1, 2])
+
+with g1:
+    st.caption("Top thèmes (LLM)")
+    themes_counts = _explode_counts(filtered_data, "llm_themes", top_n=12)
+    if not themes_counts.empty:
+        chart_themes = alt.Chart(themes_counts).mark_bar().encode(
+            y=alt.Y("llm_themes:N", sort='-x', title=None),
+            x=alt.X("count:Q", title=None),
+            color=alt.value("#4c78a8")
+        )
+        labels = alt.Chart(themes_counts).mark_text(align="left", dx=3).encode(
+            y=alt.Y("llm_themes:N", sort='-x'),
+            x=alt.X("count:Q"),
+            text=alt.Text("count:Q", format=",d")
+        )
+        st.altair_chart((chart_themes + labels).properties(height=320), use_container_width=True)
+    else:
+        st.info("Aucun thème détecté dans la sélection.")
+
+with g2:
+    st.caption("Émotions (donut)")
+    emo = (
+        filtered_data["llm_emotion"].fillna("unknown").astype(str).value_counts().reset_index()
+        .rename(columns={"index": "emotion", "llm_emotion": "count"})
+    )
+    if not emo.empty:
+        donut = alt.Chart(emo).mark_arc(innerRadius=60).encode(
+            theta="count:Q",
+            color=alt.Color("emotion:N", legend=None),
+            tooltip=["emotion:N", alt.Tooltip("count:Q", format=",d")]
+        ).properties(height=320)
+        st.altair_chart(donut, use_container_width=True)
+    else:
+        st.info("Aucune émotion dans la sélection.")
+
+with g3:
+    st.caption("Aspects moyens (radar)")
+    aspects_df = _parse_llm_score_mean(filtered_data)
+    if not aspects_df.empty:
+        # Construire un radar via coordonnées polaires
+        aspects_df = aspects_df.copy()
+        aspects_df["aspect_order"] = range(len(aspects_df))
+        aspects_df["angle"] = aspects_df["aspect_order"] / aspects_df["aspect_order"].max().replace(0, 1) * 2 * 3.14159
+        # Fermer le polygone
+        if len(aspects_df) >= 3:
+            closed = pd.concat([aspects_df, aspects_df.iloc[[0]]], ignore_index=True)
+        else:
+            closed = aspects_df
+        radar = alt.Chart(closed).mark_line(point=True).encode(
+            theta=alt.Theta("angle:Q", title=None),
+            radius=alt.Radius("score:Q", scale=alt.Scale(domain=[0, 1]), title=None),
+            tooltip=["aspect:N", alt.Tooltip("score:Q", format=".2f")]
+        ).properties(height=320)
+        st.altair_chart(radar, use_container_width=True)
+    else:
+        st.info("Aucun score d'aspect disponible.")
 
 
 # Tableau interactif avec filtres amélioré
@@ -324,10 +523,11 @@ def filtered_reviews_table(filtered_data):
     display_df = filtered_data.copy()
     display_df["llm_review_translated"] = display_df["llm_review_translated"].astype(str).apply(lambda s: fill(s, width=120))
 
+    sorted_df = display_df.sort_values(by="date_updated", ascending=False).reset_index(drop=True)
     st.data_editor(
-        display_df.sort_values(by="date_updated", ascending=False),
+        sorted_df,
         use_container_width=True,
-        height=800,
+        height=500,
         hide_index=True,
         disabled=True,
         column_config={
@@ -338,6 +538,92 @@ def filtered_reviews_table(filtered_data):
             )
         }
     )
+
+    # Sélection et panneau de détail
+    st.markdown("---")
+    left, right = st.columns([1, 1])
+
+    with left:
+        st.subheader("Sélection d'un avis")
+        options = (
+            sorted_df.assign(
+                label=lambda d: d["date_created"].astype(str)
+                + " | " + d["language"].astype(str)
+                + " | rec=" + d["recommend_the_game"].astype(str)
+                + " | id=" + d["recommendation_ID"].astype(str)
+            )[["recommendation_ID", "label"]]
+            .to_dict("records")
+        )
+        labels = {o["label"]: o["recommendation_ID"] for o in options}
+        choice = st.selectbox(
+            "Choisir un avis",
+            options=list(labels.keys()),
+            index=0 if len(labels) else None,
+        )
+
+    with right:
+        if len(sorted_df) and choice:
+            rid = labels.get(choice)
+            row = sorted_df[sorted_df["recommendation_ID"] == rid].iloc[0]
+
+            st.subheader("Détails de l'avis")
+            view_mode = st.radio("Texte à afficher", ["Traduit", "Original"], horizontal=True)
+            text = row["llm_review_translated"] if view_mode == "Traduit" else row["review"]
+            st.write(text)
+
+            if pd.notna(row.get("quote_highlight", None)) and str(row.get("quote_highlight")) != "":
+                with st.expander("Citation mise en avant"):
+                    st.write(str(row.get("quote_highlight")))
+
+            if pd.notna(row.get("tl_dr", None)) and str(row.get("tl_dr")) != "":
+                with st.expander("TL;DR"):
+                    st.write(str(row.get("tl_dr")))
+
+            # Chips/Badges via markdown simple
+            def _fmt_badge(label, color):
+                return f"<span style='background:{color};padding:2px 6px;border-radius:8px;margin-right:6px;color:white;font-size:12px'>{label}</span>"
+
+            flags = []
+            if row.get("llm_spam_flag", False):
+                flags.append(_fmt_badge("spam", "#d62728"))
+            if row.get("llm_sarcasm_flag", False):
+                flags.append(_fmt_badge("sarcasme", "#9467bd"))
+            if row.get("llm_humor_flag", False):
+                flags.append(_fmt_badge("humour", "#2ca02c"))
+            if row.get("llm_bug_reported_flag", False):
+                flags.append(_fmt_badge("bug", "#e377c2"))
+            if row.get("llm_feature_requested_flag", False):
+                flags.append(_fmt_badge("feature", "#8c564b"))
+            if flags:
+                st.markdown(" ".join(flags), unsafe_allow_html=True)
+
+            # Tags
+            def _to_tags(cell):
+                vals = _safe_parse_list_cell(cell)
+                if not vals:
+                    return ""
+                return ", ".join(sorted(set([str(v) for v in vals])))
+
+            with st.expander("Mots-clés et thématiques"):
+                st.markdown(f"**Thèmes:** {_to_tags(row.get('llm_themes'))}")
+                st.markdown(f"**Mots-clés:** {_to_tags(row.get('llm_keywords'))}")
+                if pd.notna(row.get("llm_pros", None)) and str(row.get("llm_pros")) != "":
+                    st.markdown(f"**Pros:** {row.get('llm_pros')}")
+                if pd.notna(row.get("llm_cons", None)) and str(row.get("llm_cons")) != "":
+                    st.markdown(f"**Cons:** {row.get('llm_cons')}")
+
+            with st.expander("Métadonnées"):
+                meta_cols = st.columns(2)
+                with meta_cols[0]:
+                    st.markdown(f"- Langue: `{row['language']}`")
+                    st.markdown(f"- Créé: `{row['date_created']}`")
+                    st.markdown(f"- Mis à jour: `{row['date_updated']}`")
+                    st.markdown(f"- Recommandé: `{bool(row['recommend_the_game'])}`")
+                with meta_cols[1]:
+                    st.markdown(f"- Votes +: `{row['count_review_liked']}`")
+                    st.markdown(f"- Funny: `{row['count_review_marked_funny']}`")
+                    st.markdown(f"- Toxicité: `{row.get('llm_toxicity_score', 0)}`")
+                    st.markdown(f"- NPS: `{row.get('llm_NPS', '')}`")
 
 
 
