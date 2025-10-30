@@ -264,10 +264,11 @@ if search_query:
 # Afficher le nombre de lignes et proposer l'export (dans la sidebar)
 with st.sidebar:
     st.metric("Lignes filtrées", value=f"{len(filtered_data):,}")
-    csv_bytes = filtered_data.to_csv(index=False).encode("utf-8")
+    csv_bytes = filtered_data.to_csv(index=False).encode("utf-8", "ignore")
     st.download_button("Télécharger CSV", data=csv_bytes, file_name="steam_reviews_filtered.csv", mime="text/csv")
     jsonl_str = filtered_data.to_json(orient="records", lines=True, force_ascii=False)
     st.download_button("Télécharger JSONL", data=jsonl_str, file_name="steam_reviews_filtered.jsonl", mime="application/json")
+
 
 with cols_top[0]:
     st.subheader("Reviews")
@@ -689,4 +690,68 @@ def filtered_reviews_table(filtered_data):
 
 
 filtered_reviews_table(filtered_data)
+
+
+st.subheader("Demandes de fonctionnalités — Pivot par tag")
+# Préparer les données: tags, texte de demande, avis traduit
+fr_df = filtered_data.copy()
+fr_df["tags_list"] = fr_df["llm_feature_requested_tag"].apply(_safe_parse_list_cell)
+fr_df["suggestion_text_str"] = fr_df["llm_feature_requested_text"].astype(str)
+fr_df["review_translated_str"] = fr_df["llm_review_translated"].astype(str)
+fr_df = fr_df[(fr_df["tags_list"].map(len) > 0) | (fr_df["suggestion_text_str"].str.strip() != "") | (fr_df["review_translated_str"].str.strip() != "")]
+
+# Table plate (une ligne par tag/review)
+records = []
+for _, r in fr_df.iterrows():
+    tags = r["tags_list"] if isinstance(r["tags_list"], list) and len(r["tags_list"]) else []
+    suggestion = str(r.get("llm_feature_requested_text", "")).strip()
+    review = str(r.get("llm_review_translated", "")).strip()
+    if not tags:
+        tags = ["(sans tag)"]
+    for t in tags:
+        records.append({"tag": str(t), "suggestion": suggestion, "review": review})
+
+details_df = pd.DataFrame(records)
+
+if not details_df.empty:
+    # Joindre en listes uniques séparées par des sauts de ligne
+    def _join_unique(values):
+        seen = set()
+        out = []
+        for v in values:
+            s = str(v).strip()
+            if not s:
+                continue
+            if s not in seen:
+                out.append(s)
+                seen.add(s)
+        return "\n".join(out)
+
+    pivot_df = details_df.groupby("tag").agg(
+        occurrences=("tag", "size"),
+        feature_request_text=("suggestion", _join_unique),
+        avis_llm_review_translated=("review", _join_unique)
+    ).reset_index().sort_values("occurrences", ascending=False)
+
+    st.dataframe(
+        pivot_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "tag": st.column_config.TextColumn("Tag", width=260),
+            "occurrences": st.column_config.NumberColumn("Nbr apparitions", width=160),
+            "feature_request_text": st.column_config.TextColumn("Feature request text", width=600),
+            "avis_llm_review_translated": st.column_config.TextColumn("Avis (llm_review_translated)", width=600)
+        }
+    )
+
+    csv_bytes = pivot_df.to_csv(index=False).encode("utf-8", "ignore")
+    st.download_button(
+        label="Télécharger pivot CSV",
+        data=csv_bytes,
+        file_name="feature_requests_pivot.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("Aucune demande de fonctionnalité détectée dans les reviews filtrées.")
 
