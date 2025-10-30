@@ -584,6 +584,7 @@ def filtered_reviews_table(filtered_data):
             st.info("Aucun inconvénient détecté dans la sélection.")
 
     st.subheader("Tableau des avis")
+    st.markdown("**Sélectionnez un avis dans le tableau pour voir les détails ci-dessous.**")
         # Affichage du tableau (avec word-wrap sur le texte traduit)
         # Préparer affichage avec wrap multi-lignes sur la colonne 'Avis traduit'
     display_df = filtered_data.copy()
@@ -604,6 +605,7 @@ def filtered_reviews_table(filtered_data):
         height=500,
         hide_index=True,
         disabled=False,
+        key="reviews_editor",
         column_config={
             "select": st.column_config.CheckboxColumn(
                 "Sélection",
@@ -619,11 +621,26 @@ def filtered_reviews_table(filtered_data):
         }
     )
 
-    # Mettre à jour la sélection depuis la table (une seule ligne)
-    selected_ids = edited_df.loc[edited_df["select"] == True, "rid_str"].astype(str).tolist()
-    if selected_ids:
-        # Forcer single-choice: garder la dernière sélection utilisateur
-        st.session_state["selected_rid"] = selected_ids[-1]
+    # Mettre à jour la sélection depuis la table : détecter la ligne modifiée ce run
+    prev_select = sorted_df["select"].astype(bool)
+    curr_select = edited_df["select"].astype(bool)
+    changed_mask = curr_select != prev_select
+    changed_rows = edited_df.index[changed_mask].tolist()
+
+    if changed_rows:
+        last_changed_idx = changed_rows[-1]
+        if bool(curr_select.iloc[last_changed_idx]):
+            # Case cochée : sélectionner cette ligne
+            st.session_state["selected_rid"] = str(edited_df.at[last_changed_idx, "rid_str"])
+        else:
+            # Case décochée : si d'autres sont cochées, sélectionner l'une d'elles; sinon, vider
+            selected_ids = edited_df.loc[edited_df["select"] == True, "rid_str"].astype(str).tolist()
+            st.session_state["selected_rid"] = selected_ids[-1] if selected_ids else None
+    else:
+        # Pas de changement détecté : synchroniser si nécessaire (fallback)
+        selected_ids = edited_df.loc[edited_df["select"] == True, "rid_str"].astype(str).tolist()
+        if selected_ids and st.session_state.get("selected_rid") not in selected_ids:
+            st.session_state["selected_rid"] = selected_ids[-1]
 
     # Panneau de détail
     st.markdown("---")
@@ -639,8 +656,16 @@ def filtered_reviews_table(filtered_data):
         st.session_state["selected_rid"] = row["rid_str"]
 
     if row is not None:
-        view_mode = st.radio("Texte à afficher", ["Avis traduit", "Original"], index=0, horizontal=True)
-        text = row["llm_review_translated"] if view_mode == "Avis traduit" else row["review"]
+        lang = str(row.get("language", "")).lower()
+        is_native = lang in ["french", "english"]
+        options = ["Original", "Avis traduit"]
+        default_index = 0 if is_native else 1
+        view_mode = st.radio("Texte à afficher", options, index=default_index, horizontal=True, key=f"view_mode_{row['rid_str']}")
+        # Sélection du texte selon la langue (par défaut) et le choix du radio
+        text = row["review"] if view_mode == "Original" else row["llm_review_translated"]
+        # Fallback si le traduit est vide
+        if pd.isna(text) or str(text).strip() == "":
+            text = row["review"]
         st.write(text)
 
         # Chips/Badges via markdown simple
