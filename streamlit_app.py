@@ -3,7 +3,7 @@ import duckdb
 import streamlit as st
 import altair as alt
 import pandas as pd
-import re
+from textwrap import fill
 from dotenv import load_dotenv
 load_dotenv() 
 
@@ -112,29 +112,9 @@ with st.sidebar:
     purchased_only = st.checkbox("Avis avec achat uniquement")
     reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
 
-    # Filtres supplémentaires
-    languages = sorted([str(x) for x in data["language"].dropna().unique().tolist()])
-    selected_languages = st.multiselect("Langue (multi)", options=languages)
-    emotions = sorted([str(x) for x in data["llm_emotion"].dropna().unique().tolist()])
-    selected_emotions = st.multiselect("Émotion (multi)", options=emotions)
-
-    st.divider()
-    st.subheader("LLM")
-
-    sarcasm_only = st.checkbox("Sarcasme uniquement (llm_sarcasm_flag)")
-    humor_only = st.checkbox("Humour uniquement (llm_humor_flag)")
-    bug_llm_only = st.checkbox("Bug signalé uniquement (llm_bug_reported_flag)")
-
-    # Tags de fonctionnalités demandées
-    feature_values = data["llm_feature_requested_tag"].dropna().astype(str)
-    feature_tokens = sorted({tok.strip() for s in feature_values for tok in s.split(",") if tok.strip()})
-    selected_feature_tags = st.multiselect("Feature request tags", options=feature_tokens)
-
-
 
 # Appliquer les filtres globalement
 filtered_data = data
-# Filtres généraux
 if bug_reported:
     filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
 if recommend_only:
@@ -143,26 +123,6 @@ if purchased_only:
     filtered_data = filtered_data[filtered_data["received_for_free"] == False]
 if reviewer_catalog:
     filtered_data = filtered_data[filtered_data["author_num_games_owned"] >= 1]
-
-# Filtres supplémentaires
-if selected_languages:
-    filtered_data = filtered_data[filtered_data["language"].isin(selected_languages)]
-if selected_emotions:
-    filtered_data = filtered_data[filtered_data["llm_emotion"].isin(selected_emotions)]
-if sarcasm_only:
-    filtered_data = filtered_data[filtered_data["llm_sarcasm_flag"] == True]
-if humor_only:
-    filtered_data = filtered_data[filtered_data["llm_humor_flag"] == True]
-if bug_llm_only:
-    filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
-
-if selected_feature_tags:
-    col = filtered_data["llm_feature_requested_tag"].fillna("").astype(str)
-    mask = pd.Series(False, index=filtered_data.index)
-    for t in selected_feature_tags:
-        mask = mask | col.str.contains(re.escape(t), case=False, na=False)
-    filtered_data = filtered_data[mask]
-
 
 with cols_top[0]:
     st.subheader("Nombre de reviews")
@@ -247,7 +207,7 @@ with cols_top[1]:
 
 # Tableau interactif avec filtres amélioré
 def filtered_reviews_table(filtered_data):
-    st.subheader("Tableau des avis")
+    
 
 
 # Cartes de métriques
@@ -255,27 +215,87 @@ def filtered_reviews_table(filtered_data):
     recommended_count = (filtered_data["recommend_the_game"] == True).sum()
     recommend_percent = (recommended_count / total_reviews *100 ) if total_reviews > 0 else 0
 
-    m1, m2 = st.columns(2)
-    with m1:
-        st.metric("Nombre d'avis", value=f"{total_reviews:,}")
-    with m2:
-        st.metric("Pourcentage recommandé", value=f"{recommend_percent:.1f}%")
+    # m1, m2 = st.columns(2)
+    # with m1:
+    #     st.metric("Nombre d'avis", value=f"{total_reviews:,}")
+    # with m2:
+    #     st.metric("Pourcentage recommandé", value=f"{recommend_percent:.1f}%")
 
             # Bar chart empilé: avis par date et recommandation + à droite: répartition par émotion
     st.subheader("Évolution des avis par date et recommandation")
     col_chart, col_emotion = st.columns([2, 1])
 
     with col_chart:
+        st.subheader("Timeserie des avis")
         time_grain = st.selectbox("Granularité temporelle", options=["Mois","Jour"], index=1)
         time_unit = "yearmonth" if time_grain == "Mois" else "yearmonthdate"
 
-        chart = alt.Chart(filtered_data).mark_bar().encode(
+                # Barres empilées (compte) + ligne de moyenne cumulative recommandée (%)
+                # Barres empilées (compte) + ligne bleue de moyenne cumulative recommandée (%) avec légende
+        # Couleurs pastel pour recommandé (positif) et non recommandé (négatif)
+        bars = alt.Chart(filtered_data).transform_calculate(
+            series="datum.recommend_the_game ? 'Recommandé' : 'Non recommandé'"
+        ).mark_bar().encode(
             x=alt.X(f"{time_unit}(date_created):T", title=None),
             y=alt.Y("count():Q", title=None),
-            color=alt.Color("recommend_the_game:N", title="Recommande le jeu")
-        ).properties(height=350)
+            color=alt.Color(
+                "series:N",
+                title="Série",
+                scale=alt.Scale(
+                    domain=["Recommandé", "Non recommandé", "Moyenne cumulative (%)"],
+                    range=["#A6D8A8", "#F7B3B3", "#1f77b4"]
+                )
+            )
+        )
+
+        # Calcul de la moyenne cumulative jusqu'à chaque date (en %)
+        period_series = pd.to_datetime(filtered_data["date_created"]) if time_grain == "Jour" else pd.to_datetime(filtered_data["date_created"]).dt.to_period("M").dt.to_timestamp()
+        rec_df = (
+            filtered_data.assign(period=period_series)
+            .groupby("period")
+            .agg(total=("recommend_the_game", "size"), recommended=("recommend_the_game", "sum"))
+            .reset_index()
+            .sort_values("period")
+        )
+        if not rec_df.empty:
+            rec_df["cum_total"] = rec_df["total"].cumsum()
+            rec_df["cum_recommended"] = rec_df["recommended"].cumsum()
+            rec_df["percent_cum"] = rec_df["cum_recommended"] / rec_df["cum_total"] * 100
+            rec_df["series"] = "Moyenne cumulative (%)"
+
+            # Ligne bleue avec légende
+            line = alt.Chart(rec_df).mark_line(strokeWidth=2).encode(
+                x=alt.X("period:T", title=None),
+                y=alt.Y("percent_cum:Q", title=None),
+                color=alt.Color("series:N", title="Série")
+            )
+
+            # Points et étiquettes pour min, max et actuel
+            min_idx = int(rec_df["percent_cum"].idxmin())
+            max_idx = int(rec_df["percent_cum"].idxmax())
+            current_idx = len(rec_df) - 1
+            label_points = rec_df.loc[[min_idx, max_idx, current_idx]].copy()
+            label_points["label"] = label_points["percent_cum"].map(lambda v: f"{v:.1f}%")
+
+            points = alt.Chart(label_points).mark_point(color="#1f77b4").encode(
+                x="period:T",
+                y="percent_cum:Q"
+            )
+            labels = alt.Chart(label_points).mark_text(
+                fontSize=11, dy=-8, color="#1f77b4"
+            ).encode(
+                x="period:T",
+                y="percent_cum:Q",
+                text="label:N"
+            )
+
+            chart = alt.layer(bars, line, points, labels).resolve_scale(y='independent').properties(height=350)
+        else:
+            chart = bars.properties(height=350)
 
         st.altair_chart(chart, use_container_width=True)
+
+
 
     with col_emotion:
         st.subheader("Répartition des avis par émotion")
@@ -298,10 +318,14 @@ def filtered_reviews_table(filtered_data):
         st.altair_chart(emotion_chart, use_container_width=True)
 
 
-
+    st.subheader("Tableau des avis")
         # Affichage du tableau (avec word-wrap sur le texte traduit)
+        # Préparer affichage avec wrap multi-lignes sur la colonne 'Avis traduit'
+    display_df = filtered_data.copy()
+    display_df["llm_review_translated"] = display_df["llm_review_translated"].astype(str).apply(lambda s: fill(s, width=120))
+
     st.data_editor(
-        filtered_data.sort_values(by="date_updated", ascending=False),
+        display_df.sort_values(by="date_updated", ascending=False),
         use_container_width=True,
         height=800,
         hide_index=True,
@@ -310,10 +334,11 @@ def filtered_reviews_table(filtered_data):
             "llm_review_translated": st.column_config.TextColumn(
                 "Avis traduit",
                 help="Avis traduit en anglais si langue <> en, fr",
-                width="large"
+                width=900
             )
         }
     )
+
 
 
 filtered_reviews_table(filtered_data)
