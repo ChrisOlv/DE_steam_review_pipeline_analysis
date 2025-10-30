@@ -84,26 +84,53 @@ def load_full_data():
 
 data = load_full_data()  # Charge toute la table
 
-st.title("Steam Reviews Analytics – Visualisations basées sur OBT_data.sql")
+st.title("Steam Reviews Analytics")
+st.markdown(
+    """
+Ce tableau fournit une analyse approfondie des avis utilisateurs sur Steam, enrichis avec les capacités d'Azure OpenAI.
+
+Les retours Steam sont extraits et mis à jour automatiquement chaque heure, stockés et analysés dans une base de données MotherDuck.
+
+Le dépôt complet est disponible ici : [repository GitHub](https://github.com/ChrisOlv/DE_steam_review_pipeline_analysis).
+    """
+)
 
 
 
 # Exemple de tableau interactif avec filtres
 def filtered_reviews_table(data):
-    st.subheader("Tableau des avis enrichis avec filtres")
+    st.subheader("Tableau des avis")
     
-    # Ajouter des widgets pour le filtrage dynamique
-    recommandation_options = st.multiselect(
-        "Filtrer par recommandation", options=[True,False], default=[]
-    )
-    bug_reported = st.checkbox("Afficher seulement les avis avec des bugs signalés")
 
-    # Filtrage des données
+                # Ajouter des widgets pour le filtrage dynamique
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        bug_reported = st.checkbox("Afficher seulement les avis avec des bugs signalés")
+    with col2:
+        recommend_only = st.checkbox("Afficher seulement les avis recommandés")
+    with col3:
+        purchased_only = st.checkbox("Uniquement les reviews qui ont acheté le jeu")
+
+
+                # Filtrage des données
     filtered_data = data
-    if recommandation_options:
-        filtered_data = filtered_data[filtered_data["recommend_the_game"].isin(recommandation_options)]
     if bug_reported:
         filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
+    if recommend_only:
+        filtered_data = filtered_data[filtered_data["recommend_the_game"] == True]
+    if purchased_only:
+        filtered_data = filtered_data[filtered_data["received_for_free"] == False]
+
+    # Cartes de métriques
+    total_reviews = len(filtered_data)
+    recommended_count = (filtered_data["recommend_the_game"] == True).sum()
+    recommend_percent = (recommended_count / total_reviews) if total_reviews > 0 else 0
+
+    m1, m2 = st.columns(2)
+    with m1:
+        st.metric("Review count", value=f"{total_reviews:,}")
+    with m2:
+        st.metric("Review percent", value=f"{recommend_percent:.1%}")
 
     st.dataframe(filtered_data, use_container_width=True)
 
