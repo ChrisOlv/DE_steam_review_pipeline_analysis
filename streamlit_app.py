@@ -128,6 +128,7 @@ def _explode_counts(df: pd.DataFrame, col: str, top_n: int = 12) -> pd.DataFrame
 def _parse_llm_score_mean(df: pd.DataFrame) -> pd.DataFrame:
     # Parse JSON-like score dict per row, compute mean per aspect
     import json
+    import ast
     aspects_accum = {}
     counts = {}
     if "llm_score" not in df.columns:
@@ -137,7 +138,12 @@ def _parse_llm_score_mean(df: pd.DataFrame) -> pd.DataFrame:
             if isinstance(cell, dict):
                 d = cell
             else:
-                d = json.loads(str(cell))
+                s = str(cell)
+                try:
+                    d = json.loads(s)
+                except Exception:
+                    # fallback for python-literal-like strings
+                    d = ast.literal_eval(s)
             for k, v in d.items():
                 try:
                     v_float = float(v)
@@ -264,7 +270,7 @@ with st.sidebar:
     st.download_button("Télécharger JSONL", data=jsonl_str, file_name="steam_reviews_filtered.jsonl", mime="application/json")
 
 with cols_top[0]:
-    st.subheader("Nombre de reviews")
+    st.subheader("Reviews")
     trend_df = (
         filtered_data.groupby("date_created").size().reset_index(name="count").sort_values("date_created")
     )
@@ -299,7 +305,7 @@ with cols_top[0]:
         st.metric("Nombre de reviews", value=f"{len(filtered_data):,}")
 
 with cols_top[1]:
-    st.subheader("% recommandé")
+    st.subheader("% reco")
     rec_trend_df = (
         filtered_data.groupby("date_created").agg(
             total=("recommend_the_game", "size"),
@@ -345,63 +351,74 @@ with cols_top[1]:
 
 # Section: Thématiques, émotions, aspects
 st.subheader("Thématiques et qualité perçue")
-g1, g2, g3 = st.columns([2, 1, 2])
+st.caption("Barres: issues de la colonne `llm_themes`, `llm_pros`, `llm_cons` (LLM).")
+g1, g2, g3 = st.columns([2, 2, 2])
 
 with g1:
     st.caption("Top thèmes (LLM)")
     themes_counts = _explode_counts(filtered_data, "llm_themes", top_n=12)
     if not themes_counts.empty:
-        chart_themes = alt.Chart(themes_counts).mark_bar().encode(
-            y=alt.Y("llm_themes:N", sort='-x', title=None),
-            x=alt.X("count:Q", title=None),
-            color=alt.value("#4c78a8")
+        row_count = len(themes_counts)
+        chart_height = max(280, 28 * row_count)
+        chart_themes = alt.Chart(themes_counts).mark_bar(size=22).encode(
+            y=alt.Y("llm_themes:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+            x=alt.X("count:Q", title=None, axis=None),
+            color=alt.value("#A6D8A8")
         )
-        labels = alt.Chart(themes_counts).mark_text(align="left", dx=3).encode(
+        labels = alt.Chart(themes_counts).mark_text(
+            align="right", baseline="middle", dx=-6, color="white", fontSize=12
+        ).encode(
             y=alt.Y("llm_themes:N", sort='-x'),
             x=alt.X("count:Q"),
             text=alt.Text("count:Q", format=",d")
         )
-        st.altair_chart((chart_themes + labels).properties(height=320), use_container_width=True)
+        st.altair_chart((chart_themes + labels).properties(height=chart_height), use_container_width=True)
     else:
         st.info("Aucun thème détecté dans la sélection.")
 
 with g2:
-    st.caption("Émotions (donut)")
-    emo = (
-        filtered_data["llm_emotion"].fillna("unknown").astype(str).value_counts().reset_index()
-        .rename(columns={"index": "emotion", "llm_emotion": "count"})
-    )
-    if not emo.empty:
-        donut = alt.Chart(emo).mark_arc(innerRadius=60).encode(
-            theta="count:Q",
-            color=alt.Color("emotion:N", legend=None),
-            tooltip=["emotion:N", alt.Tooltip("count:Q", format=",d")]
-        ).properties(height=320)
-        st.altair_chart(donut, use_container_width=True)
+    st.caption("Top Pros (LLM)")
+    pros_counts = _explode_counts(filtered_data, "llm_pros", top_n=12)
+    if not pros_counts.empty:
+        row_count = len(pros_counts)
+        chart_height = max(280, 28 * row_count)
+        chart_pros = alt.Chart(pros_counts).mark_bar(size=22).encode(
+            y=alt.Y("llm_pros:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+            x=alt.X("count:Q", title=None, axis=None),
+            color=alt.value("#B4D5F5")
+        )
+        labels = alt.Chart(pros_counts).mark_text(
+            align="right", baseline="middle", dx=-6, color="white", fontSize=12
+        ).encode(
+            y=alt.Y("llm_pros:N", sort='-x'),
+            x=alt.X("count:Q"),
+            text=alt.Text("count:Q", format=",d")
+        )
+        st.altair_chart((chart_pros + labels).properties(height=chart_height), use_container_width=True)
     else:
-        st.info("Aucune émotion dans la sélection.")
+        st.info("Aucun pro détecté dans la sélection.")
 
 with g3:
-    st.caption("Aspects moyens (radar)")
-    aspects_df = _parse_llm_score_mean(filtered_data)
-    if not aspects_df.empty:
-        # Construire un radar via coordonnées polaires
-        aspects_df = aspects_df.copy()
-        aspects_df["aspect_order"] = range(len(aspects_df))
-        aspects_df["angle"] = aspects_df["aspect_order"] / aspects_df["aspect_order"].max().replace(0, 1) * 2 * 3.14159
-        # Fermer le polygone
-        if len(aspects_df) >= 3:
-            closed = pd.concat([aspects_df, aspects_df.iloc[[0]]], ignore_index=True)
-        else:
-            closed = aspects_df
-        radar = alt.Chart(closed).mark_line(point=True).encode(
-            theta=alt.Theta("angle:Q", title=None),
-            radius=alt.Radius("score:Q", scale=alt.Scale(domain=[0, 1]), title=None),
-            tooltip=["aspect:N", alt.Tooltip("score:Q", format=".2f")]
-        ).properties(height=320)
-        st.altair_chart(radar, use_container_width=True)
+    st.caption("Top Cons (LLM)")
+    cons_counts = _explode_counts(filtered_data, "llm_cons", top_n=12)
+    if not cons_counts.empty:
+        row_count = len(cons_counts)
+        chart_height = max(280, 28 * row_count)
+        chart_cons = alt.Chart(cons_counts).mark_bar(size=22).encode(
+            y=alt.Y("llm_cons:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+            x=alt.X("count:Q", title=None, axis=None),
+            color=alt.value("#F7B3B3")
+        )
+        labels = alt.Chart(cons_counts).mark_text(
+            align="right", baseline="middle", dx=-6, color="white", fontSize=12
+        ).encode(
+            y=alt.Y("llm_cons:N", sort='-x'),
+            x=alt.X("count:Q"),
+            text=alt.Text("count:Q", format=",d")
+        )
+        st.altair_chart((chart_cons + labels).properties(height=chart_height), use_container_width=True)
     else:
-        st.info("Aucun score d'aspect disponible.")
+        st.info("Aucun inconvénient détecté dans la sélection.")
 
 
 # Tableau interactif avec filtres amélioré
@@ -426,12 +443,18 @@ def filtered_reviews_table(filtered_data):
 
     with col_chart:
         st.subheader("Timeserie des avis")
-        time_grain = st.selectbox("Granularité temporelle", options=["Mois","Jour"], index=1)
-        time_unit = "yearmonth" if time_grain == "Mois" else "yearmonthdate"
+        time_grain = st.radio(
+            "Granularité (affichage)",
+            options=["Jour","Mois"],
+            index=0,
+            horizontal=True,
+            key="radio_granularite"
+        )
+        time_unit = "yearmonthdate" if time_grain == "Jour" else "yearmonth"
 
-                # Barres empilées (compte) + ligne de moyenne cumulative recommandée (%)
-                # Barres empilées (compte) + ligne bleue de moyenne cumulative recommandée (%) avec légende
+                # Barres empilées (compte) + ligne de moyenne cumulative recommandée (%) avec légende
         # Couleurs pastel pour recommandé (positif) et non recommandé (négatif)
+        # Construit 'series' explicitement pour contrôler l'ordre d'empilement (non recommandé en haut, recommandé en bas)
         bars = alt.Chart(filtered_data).transform_calculate(
             series="datum.recommend_the_game ? 'Recommandé' : 'Non recommandé'"
         ).mark_bar().encode(
@@ -440,10 +463,15 @@ def filtered_reviews_table(filtered_data):
             color=alt.Color(
                 "series:N",
                 title="Série",
+                sort=["Non recommandé", "Recommandé"],
                 scale=alt.Scale(
-                    domain=["Recommandé", "Non recommandé", "Moyenne cumulative (%)"],
-                    range=["#A6D8A8", "#F7B3B3", "#1f77b4"]
+                    domain=["Non recommandé", "Recommandé", "Moyenne cumulative (%)"],
+                    range=["#F7B3B3", "#A6D8A8", "#1f77b4"]
                 )
+            ),
+            order=alt.Order(
+                "series:N",
+                sort="ascending"
             )
         )
 
@@ -465,7 +493,7 @@ def filtered_reviews_table(filtered_data):
             # Ligne bleue avec légende
             line = alt.Chart(rec_df).mark_line(strokeWidth=2).encode(
                 x=alt.X("period:T", title=None),
-                y=alt.Y("percent_cum:Q", title=None),
+                y=alt.Y("percent_cum:Q", title=None, axis=alt.Axis(title=None)),
                 color=alt.Color("series:N", title="Série")
             )
 
@@ -498,23 +526,55 @@ def filtered_reviews_table(filtered_data):
 
     with col_emotion:
         st.subheader("Répartition des avis par émotion")
-        bars = alt.Chart(filtered_data).mark_bar().encode(
-            y=alt.Y("llm_emotion:N", title=None, sort="-x"),
-            x=alt.X("count():Q", title=None),
-            color=alt.Color("llm_emotion:N", legend=None)
+        # Palette pastel étendue pour couvrir plus d'émotions, et fallback cyclique
+        emotion_palette = {
+            "joy": "#A6D8A8",
+            "sadness": "#B4D5F5",
+            "anger": "#F7B3B3",
+            "surprise": "#FAEDA3",
+            "fear": "#B8A4E3",
+            "disgust": "#FFD1B3",
+            "trust": "#C7EDCC",
+            "anticipation": "#F6DDCC",
+            "contempt": "#CFC7CF",
+            "boredom": "#B7D7E8",
+            "excitement": "#E7CEF7",
+            "admiration": "#DDEBCF",
+            "neutral": "#CCCCCC",
+            "unknown": "#CCCCCC",
+            "undefined": "#CCCCCC",
+        }
+        pastel_cycle_extra = ["#FCD5CE","#B8F2E6","#CABBE9","#FFF1E6","#B6E2D3","#E1C3E6"]
+        emo_df = filtered_data["llm_emotion"].fillna("unknown").astype(str).value_counts().reset_index()
+        emo_df.columns = ["llm_emotion", "count"]
+        emo_df = emo_df.sort_values("count", ascending=False)
+        emo_labels = emo_df["llm_emotion"].tolist()
+        # Color mapping avec fallback cyclique pastel
+        color_domain = emo_labels
+        # Associer chaque label à une couleur unique
+        used_for_others = 0
+        color_range = []
+        for l in emo_labels:
+            base = emotion_palette.get(l.lower())
+            if base is not None:
+                color_range.append(base)
+            else:
+                # Pastel unique et cyclique pour les hors liste
+                color_range.append(pastel_cycle_extra[used_for_others % len(pastel_cycle_extra)])
+                used_for_others += 1
+        bars = alt.Chart(emo_df).mark_bar().encode(
+            y=alt.Y("llm_emotion:N", title=None, sort=emo_labels, axis=alt.Axis(labelLimit=150, labelAngle=0, labelFontSize=13, labelAlign="right")),
+            x=alt.X("count:Q", title=None, axis=None),
+            color=alt.Color("llm_emotion:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None)
         )
-        labels = alt.Chart(filtered_data).mark_text(
-            align="left",
-            dx=3,
-            color="black"
+        labels = alt.Chart(emo_df).mark_text(
+            align="right", baseline="middle", dx=-6, color="white", fontSize=12
         ).encode(
-            y=alt.Y("llm_emotion:N", sort="-x"),
-            x=alt.X("count():Q"),
-            text=alt.Text("count():Q", format=",d")
+            y=alt.Y("llm_emotion:N", sort=emo_labels),
+            x=alt.X("count:Q"),
+            text=alt.Text("count:Q", format=",d")
         )
-        emotion_chart = (bars + labels).properties(height=350)
-
-        st.altair_chart(emotion_chart, use_container_width=True)
+        st.altair_chart((bars + labels).properties(height=max(280, 28*len(emo_df))), use_container_width=True)
 
 
     st.subheader("Tableau des avis")
@@ -524,106 +584,107 @@ def filtered_reviews_table(filtered_data):
     display_df["llm_review_translated"] = display_df["llm_review_translated"].astype(str).apply(lambda s: fill(s, width=120))
 
     sorted_df = display_df.sort_values(by="date_updated", ascending=False).reset_index(drop=True)
-    st.data_editor(
+    sorted_df["rid_str"] = sorted_df["recommendation_ID"].astype(str)
+    # Colonne de sélection (single choice) et position en première colonne
+    selected_rid_state = st.session_state.get("selected_rid")
+    sorted_df["select"] = sorted_df["recommendation_ID"].astype(str).eq(str(selected_rid_state))
+    # Réordonner pour avoir 'select' en premier
+    select_first_cols = ["select"] + [c for c in sorted_df.columns if c != "select"]
+    sorted_df = sorted_df[select_first_cols]
+
+    edited_df = st.data_editor(
         sorted_df,
         use_container_width=True,
         height=500,
         hide_index=True,
-        disabled=True,
+        disabled=False,
         column_config={
+            "select": st.column_config.CheckboxColumn(
+                "Sélection",
+                help="Cliquer pour sélectionner une ligne",
+                width=80
+            ),
             "llm_review_translated": st.column_config.TextColumn(
                 "Avis traduit",
                 help="Avis traduit en anglais si langue <> en, fr",
-                width=900
+                width=900,
+                disabled=True
             )
         }
     )
 
-    # Sélection et panneau de détail
+    # Mettre à jour la sélection depuis la table (une seule ligne)
+    selected_ids = edited_df.loc[edited_df["select"] == True, "rid_str"].astype(str).tolist()
+    if selected_ids:
+        # Forcer single-choice: garder la dernière sélection utilisateur
+        st.session_state["selected_rid"] = selected_ids[-1]
+
+    # Panneau de détail
     st.markdown("---")
-    left, right = st.columns([1, 1])
+    st.subheader("Détails de l'avis")
+    row = None
+    rid = st.session_state.get("selected_rid")
+    if rid is not None and len(sorted_df):
+        match = sorted_df[sorted_df["rid_str"].astype(str) == str(rid)]
+        if not match.empty:
+            row = match.iloc[0]
+    if row is None and len(sorted_df):
+        row = sorted_df.iloc[0]
+        st.session_state["selected_rid"] = row["rid_str"]
 
-    with left:
-        st.subheader("Sélection d'un avis")
-        options = (
-            sorted_df.assign(
-                label=lambda d: d["date_created"].astype(str)
-                + " | " + d["language"].astype(str)
-                + " | rec=" + d["recommend_the_game"].astype(str)
-                + " | id=" + d["recommendation_ID"].astype(str)
-            )[["recommendation_ID", "label"]]
-            .to_dict("records")
-        )
-        labels = {o["label"]: o["recommendation_ID"] for o in options}
-        choice = st.selectbox(
-            "Choisir un avis",
-            options=list(labels.keys()),
-            index=0 if len(labels) else None,
-        )
+    if row is not None:
+        view_mode = st.radio("Texte à afficher", ["Avis traduit", "Original"], index=0, horizontal=True)
+        text = row["llm_review_translated"] if view_mode == "Avis traduit" else row["review"]
+        st.write(text)
 
-    with right:
-        if len(sorted_df) and choice:
-            rid = labels.get(choice)
-            row = sorted_df[sorted_df["recommendation_ID"] == rid].iloc[0]
+        # Chips/Badges via markdown simple
+        def _fmt_badge(label, color):
+            return f"<span style='background:{color};padding:2px 6px;border-radius:8px;margin-right:6px;color:white;font-size:12px'>{label}</span>"
 
-            st.subheader("Détails de l'avis")
-            view_mode = st.radio("Texte à afficher", ["Traduit", "Original"], horizontal=True)
-            text = row["llm_review_translated"] if view_mode == "Traduit" else row["review"]
-            st.write(text)
+        flags = []
+        if row.get("llm_spam_flag", False):
+            flags.append(_fmt_badge("spam", "#d62728"))
+        if row.get("llm_sarcasm_flag", False):
+            flags.append(_fmt_badge("sarcasme", "#9467bd"))
+        if row.get("llm_humor_flag", False):
+            flags.append(_fmt_badge("humour", "#2ca02c"))
+        if row.get("llm_bug_reported_flag", False):
+            flags.append(_fmt_badge("bug", "#e377c2"))
+        if row.get("llm_feature_requested_flag", False):
+            flags.append(_fmt_badge("feature", "#8c564b"))
+        if flags:
+            st.markdown(" ".join(flags), unsafe_allow_html=True)
 
-            if pd.notna(row.get("quote_highlight", None)) and str(row.get("quote_highlight")) != "":
-                with st.expander("Citation mise en avant"):
-                    st.write(str(row.get("quote_highlight")))
+        # Tags
+        def _to_tags(cell):
+            vals = _safe_parse_list_cell(cell)
+            if not vals:
+                return ""
+            return ", ".join(sorted(set([str(v) for v in vals])))
 
-            if pd.notna(row.get("tl_dr", None)) and str(row.get("tl_dr")) != "":
-                with st.expander("TL;DR"):
-                    st.write(str(row.get("tl_dr")))
+        with st.expander("Mots-clés et thématiques", expanded=True):
+            st.markdown(f"**Thèmes:** {_to_tags(row.get('llm_themes'))}")
+            st.markdown(f"**Mots-clés:** {_to_tags(row.get('llm_keywords'))}")
+            if pd.notna(row.get("llm_pros", None)) and str(row.get("llm_pros")) != "":
+                st.markdown(f"**Pros:** {row.get('llm_pros')}")
+            if pd.notna(row.get("llm_cons", None)) and str(row.get("llm_cons")) != "":
+                st.markdown(f"**Cons:** {row.get('llm_cons')}")
 
-            # Chips/Badges via markdown simple
-            def _fmt_badge(label, color):
-                return f"<span style='background:{color};padding:2px 6px;border-radius:8px;margin-right:6px;color:white;font-size:12px'>{label}</span>"
-
-            flags = []
-            if row.get("llm_spam_flag", False):
-                flags.append(_fmt_badge("spam", "#d62728"))
-            if row.get("llm_sarcasm_flag", False):
-                flags.append(_fmt_badge("sarcasme", "#9467bd"))
-            if row.get("llm_humor_flag", False):
-                flags.append(_fmt_badge("humour", "#2ca02c"))
-            if row.get("llm_bug_reported_flag", False):
-                flags.append(_fmt_badge("bug", "#e377c2"))
-            if row.get("llm_feature_requested_flag", False):
-                flags.append(_fmt_badge("feature", "#8c564b"))
-            if flags:
-                st.markdown(" ".join(flags), unsafe_allow_html=True)
-
-            # Tags
-            def _to_tags(cell):
-                vals = _safe_parse_list_cell(cell)
-                if not vals:
-                    return ""
-                return ", ".join(sorted(set([str(v) for v in vals])))
-
-            with st.expander("Mots-clés et thématiques"):
-                st.markdown(f"**Thèmes:** {_to_tags(row.get('llm_themes'))}")
-                st.markdown(f"**Mots-clés:** {_to_tags(row.get('llm_keywords'))}")
-                if pd.notna(row.get("llm_pros", None)) and str(row.get("llm_pros")) != "":
-                    st.markdown(f"**Pros:** {row.get('llm_pros')}")
-                if pd.notna(row.get("llm_cons", None)) and str(row.get("llm_cons")) != "":
-                    st.markdown(f"**Cons:** {row.get('llm_cons')}")
-
-            with st.expander("Métadonnées"):
-                meta_cols = st.columns(2)
-                with meta_cols[0]:
-                    st.markdown(f"- Langue: `{row['language']}`")
-                    st.markdown(f"- Créé: `{row['date_created']}`")
-                    st.markdown(f"- Mis à jour: `{row['date_updated']}`")
-                    st.markdown(f"- Recommandé: `{bool(row['recommend_the_game'])}`")
-                with meta_cols[1]:
-                    st.markdown(f"- Votes +: `{row['count_review_liked']}`")
-                    st.markdown(f"- Funny: `{row['count_review_marked_funny']}`")
-                    st.markdown(f"- Toxicité: `{row.get('llm_toxicity_score', 0)}`")
-                    st.markdown(f"- NPS: `{row.get('llm_NPS', '')}`")
+        with st.expander("Métadonnées", expanded=True):
+            meta_cols = st.columns(2)
+            with meta_cols[0]:
+                st.markdown(f"- Langue: `{row['language']}`")
+                st.markdown(f"- Créé: `{row['date_created']}`")
+                st.markdown(f"- Mis à jour: `{row['date_updated']}`")
+                st.markdown(f"- Recommandé: `{bool(row['recommend_the_game'])}`")
+                st.markdown(f"- Jeux possédés (auteur): `{row.get('author_num_games_owned', '')}`")
+            with meta_cols[1]:
+                st.markdown(f"- Votes +: `{row['count_review_liked']}`")
+                st.markdown(f"- Funny: `{row['count_review_marked_funny']}`")
+                st.markdown(f"- Toxicité: `{row.get('llm_toxicity_score', 0)}`")
+                st.markdown(f"- NPS: `{row.get('llm_NPS', '')}`")
+                st.markdown(f"- Avis (auteur): `{row.get('author_num_reviews', '')}`")
+            st.markdown(f"- Temps de jeu total (auteur): `{row.get('author_playtime_forever', '')}`")
 
 
 
