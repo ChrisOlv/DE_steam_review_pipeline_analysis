@@ -34,7 +34,7 @@ def load_full_data():
                CAST(TO_TIMESTAMP(rr.timestamp_created) AS DATE) AS date_created,
                CAST(TO_TIMESTAMP(rr.timestamp_updated) AS DATE) AS date_updated,
                rr.language,
-               le.normalized_text_en as llm_review_translated,
+               rr.review as review,
                rr.voted_up as recommend_the_game,
                rr.votes_up as count_review_liked,
                rr.votes_funny as count_review_marked_funny,
@@ -74,8 +74,8 @@ def load_full_data():
                le.nps_category as llm_NPS,
                le.emotion_primary as llm_emotion,
                le.pertinence as llm_review_pertinence_flag,
-               rr.review,
                rr.recommendationid as recommendation_ID,
+               le.normalized_text_en as llm_review_translated,
                ROUND(rr.weighted_vote_score,1) as weighted_vote_score,
                rr.author_steamid as author_ID
         FROM raw_reviews rr
@@ -86,6 +86,10 @@ def load_full_data():
     # convertion des datatypes
     df["date_created"] = df["date_created"].dt.date  
     df["date_updated"] = df["date_updated"].dt.date 
+    df["Review"] = df.apply(
+        lambda row: row["review"] if row["language"] in ["french", "english"] else row["llm_review_translated"], axis=1
+    )
+    
     return df
 
 data = load_full_data()  # Charge toute la table
@@ -163,24 +167,22 @@ def _parse_llm_score_mean(df: pd.DataFrame) -> pd.DataFrame:
 cols_top = st.columns(6)
 # Sidebar : filters
 with st.sidebar:
-    st.header("Chart parameters ⚙️")
+    st.header("Filters")
     # Filtres rapides existants
-    bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
+    # bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
     recommend_only = st.checkbox("Avis positifs uniquement")
     purchased_only = st.checkbox("Avis avec achat uniquement")
     reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
 
-    st.divider()
-    st.subheader("Filtres avancés")
 
     # Plage de dates (création)
     min_date = pd.to_datetime(data["date_created"]).min().date() if len(data) else None
     max_date = pd.to_datetime(data["date_created"]).max().date() if len(data) else None
-    date_range = st.date_input(
+    date_range = st.slider(
         "Période (date de création)",
-        value=(min_date, max_date) if min_date and max_date else None,
         min_value=min_date,
         max_value=max_date,
+        value=(min_date, max_date) if min_date and max_date else (None, None),
         format="YYYY-MM-DD"
     )
 
@@ -189,8 +191,10 @@ with st.sidebar:
     selected_languages = st.multiselect(
         "Langues",
         options=languages,
-        default=languages
+    default=[]
     )
+    st.divider()
+    st.subheader("Filtres LLM")
 
     # Scores
     sentiment_min, sentiment_max = st.slider(
@@ -215,8 +219,8 @@ with st.sidebar:
 
 # Appliquer les filtres globalement
 filtered_data = data
-if bug_reported:
-    filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
+# if bug_reported:
+#     filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
 if recommend_only:
     filtered_data = filtered_data[filtered_data["recommend_the_game"] == True]
 if purchased_only:
@@ -350,76 +354,7 @@ with cols_top[1]:
 
 
 
-# Section: Thématiques, émotions, aspects
-st.subheader("Thématiques et qualité perçue")
-st.caption("Barres: issues de la colonne `llm_themes`, `llm_pros`, `llm_cons` (LLM).")
-g1, g2, g3 = st.columns([2, 2, 2])
 
-with g1:
-    st.caption("Top thèmes (LLM)")
-    themes_counts = _explode_counts(filtered_data, "llm_themes", top_n=12)
-    if not themes_counts.empty:
-        row_count = len(themes_counts)
-        chart_height = max(280, 28 * row_count)
-        chart_themes = alt.Chart(themes_counts).mark_bar(size=22).encode(
-            y=alt.Y("llm_themes:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
-            x=alt.X("count:Q", title=None, axis=None),
-            color=alt.value("#A6D8A8")
-        )
-        labels = alt.Chart(themes_counts).mark_text(
-            align="right", baseline="middle", dx=-6, color="white", fontSize=12
-        ).encode(
-            y=alt.Y("llm_themes:N", sort='-x'),
-            x=alt.X("count:Q"),
-            text=alt.Text("count:Q", format=",d")
-        )
-        st.altair_chart((chart_themes + labels).properties(height=chart_height), use_container_width=True)
-    else:
-        st.info("Aucun thème détecté dans la sélection.")
-
-with g2:
-    st.caption("Top Pros (LLM)")
-    pros_counts = _explode_counts(filtered_data, "llm_pros", top_n=12)
-    if not pros_counts.empty:
-        row_count = len(pros_counts)
-        chart_height = max(280, 28 * row_count)
-        chart_pros = alt.Chart(pros_counts).mark_bar(size=22).encode(
-            y=alt.Y("llm_pros:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
-            x=alt.X("count:Q", title=None, axis=None),
-            color=alt.value("#B4D5F5")
-        )
-        labels = alt.Chart(pros_counts).mark_text(
-            align="right", baseline="middle", dx=-6, color="white", fontSize=12
-        ).encode(
-            y=alt.Y("llm_pros:N", sort='-x'),
-            x=alt.X("count:Q"),
-            text=alt.Text("count:Q", format=",d")
-        )
-        st.altair_chart((chart_pros + labels).properties(height=chart_height), use_container_width=True)
-    else:
-        st.info("Aucun pro détecté dans la sélection.")
-
-with g3:
-    st.caption("Top Cons (LLM)")
-    cons_counts = _explode_counts(filtered_data, "llm_cons", top_n=12)
-    if not cons_counts.empty:
-        row_count = len(cons_counts)
-        chart_height = max(280, 28 * row_count)
-        chart_cons = alt.Chart(cons_counts).mark_bar(size=22).encode(
-            y=alt.Y("llm_cons:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
-            x=alt.X("count:Q", title=None, axis=None),
-            color=alt.value("#F7B3B3")
-        )
-        labels = alt.Chart(cons_counts).mark_text(
-            align="right", baseline="middle", dx=-6, color="white", fontSize=12
-        ).encode(
-            y=alt.Y("llm_cons:N", sort='-x'),
-            x=alt.X("count:Q"),
-            text=alt.Text("count:Q", format=",d")
-        )
-        st.altair_chart((chart_cons + labels).properties(height=chart_height), use_container_width=True)
-    else:
-        st.info("Aucun inconvénient détecté dans la sélection.")
 
 
 # Tableau interactif avec filtres amélioré
@@ -578,6 +513,76 @@ def filtered_reviews_table(filtered_data):
         st.altair_chart((bars + labels).properties(height=max(280, 28*len(emo_df))), use_container_width=True)
 
 
+    st.subheader("Thématiques et qualité perçue")
+    st.caption("Barres: issues de la colonne `llm_themes`, `llm_pros`, `llm_cons` (LLM).")
+    g1, g2, g3 = st.columns([2, 2, 2])
+
+    with g1:
+        st.caption("Top thèmes (LLM)")
+        themes_counts = _explode_counts(filtered_data, "llm_themes", top_n=12)
+        if not themes_counts.empty:
+            row_count = len(themes_counts)
+            chart_height = max(280, 28 * row_count)
+            chart_themes = alt.Chart(themes_counts).mark_bar(size=22).encode(
+                y=alt.Y("llm_themes:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+                x=alt.X("count:Q", title=None, axis=None),
+                color=alt.value("#A6D8A8")
+            )
+            labels = alt.Chart(themes_counts).mark_text(
+                align="right", baseline="middle", dx=-6, color="white", fontSize=12
+            ).encode(
+                y=alt.Y("llm_themes:N", sort='-x'),
+                x=alt.X("count:Q"),
+                text=alt.Text("count:Q", format=",d")
+            )
+            st.altair_chart((chart_themes + labels).properties(height=chart_height), use_container_width=True)
+        else:
+            st.info("Aucun thème détecté dans la sélection.")
+
+    with g2:
+        st.caption("Top Pros (LLM)")
+        pros_counts = _explode_counts(filtered_data, "llm_pros", top_n=12)
+        if not pros_counts.empty:
+            row_count = len(pros_counts)
+            chart_height = max(280, 28 * row_count)
+            chart_pros = alt.Chart(pros_counts).mark_bar(size=22).encode(
+                y=alt.Y("llm_pros:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+                x=alt.X("count:Q", title=None, axis=None),
+                color=alt.value("#B4D5F5")
+            )
+            labels = alt.Chart(pros_counts).mark_text(
+                align="right", baseline="middle", dx=-6, color="white", fontSize=12
+            ).encode(
+                y=alt.Y("llm_pros:N", sort='-x'),
+                x=alt.X("count:Q"),
+                text=alt.Text("count:Q", format=",d")
+            )
+            st.altair_chart((chart_pros + labels).properties(height=chart_height), use_container_width=True)
+        else:
+            st.info("Aucun pro détecté dans la sélection.")
+
+    with g3:
+        st.caption("Top Cons (LLM)")
+        cons_counts = _explode_counts(filtered_data, "llm_cons", top_n=12)
+        if not cons_counts.empty:
+            row_count = len(cons_counts)
+            chart_height = max(280, 28 * row_count)
+            chart_cons = alt.Chart(cons_counts).mark_bar(size=22).encode(
+                y=alt.Y("llm_cons:N", sort='-x', title=None, axis=alt.Axis(labelLimit=200, labelAngle=0, labelFontSize=13, labelAlign='right'), scale=alt.Scale(padding=5)),
+                x=alt.X("count:Q", title=None, axis=None),
+                color=alt.value("#F7B3B3")
+            )
+            labels = alt.Chart(cons_counts).mark_text(
+                align="right", baseline="middle", dx=-6, color="white", fontSize=12
+            ).encode(
+                y=alt.Y("llm_cons:N", sort='-x'),
+                x=alt.X("count:Q"),
+                text=alt.Text("count:Q", format=",d")
+            )
+            st.altair_chart((chart_cons + labels).properties(height=chart_height), use_container_width=True)
+        else:
+            st.info("Aucun inconvénient détecté dans la sélection.")
+
     st.subheader("Tableau des avis")
         # Affichage du tableau (avec word-wrap sur le texte traduit)
         # Préparer affichage avec wrap multi-lignes sur la colonne 'Avis traduit'
@@ -690,68 +695,4 @@ def filtered_reviews_table(filtered_data):
 
 
 filtered_reviews_table(filtered_data)
-
-
-st.subheader("Demandes de fonctionnalités — Pivot par tag")
-# Préparer les données: tags, texte de demande, avis traduit
-fr_df = filtered_data.copy()
-fr_df["tags_list"] = fr_df["llm_feature_requested_tag"].apply(_safe_parse_list_cell)
-fr_df["suggestion_text_str"] = fr_df["llm_feature_requested_text"].astype(str)
-fr_df["review_translated_str"] = fr_df["llm_review_translated"].astype(str)
-fr_df = fr_df[(fr_df["tags_list"].map(len) > 0) | (fr_df["suggestion_text_str"].str.strip() != "") | (fr_df["review_translated_str"].str.strip() != "")]
-
-# Table plate (une ligne par tag/review)
-records = []
-for _, r in fr_df.iterrows():
-    tags = r["tags_list"] if isinstance(r["tags_list"], list) and len(r["tags_list"]) else []
-    suggestion = str(r.get("llm_feature_requested_text", "")).strip()
-    review = str(r.get("llm_review_translated", "")).strip()
-    if not tags:
-        tags = ["(sans tag)"]
-    for t in tags:
-        records.append({"tag": str(t), "suggestion": suggestion, "review": review})
-
-details_df = pd.DataFrame(records)
-
-if not details_df.empty:
-    # Joindre en listes uniques séparées par des sauts de ligne
-    def _join_unique(values):
-        seen = set()
-        out = []
-        for v in values:
-            s = str(v).strip()
-            if not s:
-                continue
-            if s not in seen:
-                out.append(s)
-                seen.add(s)
-        return "\n".join(out)
-
-    pivot_df = details_df.groupby("tag").agg(
-        occurrences=("tag", "size"),
-        feature_request_text=("suggestion", _join_unique),
-        avis_llm_review_translated=("review", _join_unique)
-    ).reset_index().sort_values("occurrences", ascending=False)
-
-    st.dataframe(
-        pivot_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "tag": st.column_config.TextColumn("Tag", width=260),
-            "occurrences": st.column_config.NumberColumn("Nbr apparitions", width=160),
-            "feature_request_text": st.column_config.TextColumn("Feature request text", width=600),
-            "avis_llm_review_translated": st.column_config.TextColumn("Avis (llm_review_translated)", width=600)
-        }
-    )
-
-    csv_bytes = pivot_df.to_csv(index=False).encode("utf-8", "ignore")
-    st.download_button(
-        label="Télécharger pivot CSV",
-        data=csv_bytes,
-        file_name="feature_requests_pivot.csv",
-        mime="text/csv"
-    )
-else:
-    st.info("Aucune demande de fonctionnalité détectée dans les reviews filtrées.")
 
