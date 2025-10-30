@@ -32,14 +32,11 @@ def load_full_data():
         SELECT 
                CAST(TO_TIMESTAMP(rr.timestamp_created) AS DATE) AS date_created,
                CAST(TO_TIMESTAMP(rr.timestamp_updated) AS DATE) AS date_updated,
-               rr.recommendationid as recommendation_ID,
-               rr.author_steamid as author_ID,
                rr.language,
-               rr.review,
+               le.normalized_text_en as llm_review_translated,
                rr.voted_up as recommend_the_game,
                rr.votes_up as count_review_liked,
                rr.votes_funny as count_review_marked_funny,
-               rr.weighted_vote_score,
                rr.comment_count,
                rr.steam_purchase,
                rr.received_for_free,
@@ -59,7 +56,6 @@ def load_full_data():
                le.aspect_scores as llm_score,
                le.feature_requests as llm_feature_requests,
                le.language_detected,
-               le.normalized_text_en as llm_review_translated,
                le.quote_highlight,
                le.toxicity_score as llm_toxicity_score,
                le.sarcasm_flag as llm_sarcasm_flag,
@@ -76,15 +72,23 @@ def load_full_data():
                le.reviewer_experience_level,
                le.nps_category as llm_NPS,
                le.emotion_primary as llm_emotion,
-               le.pertinence as llm_review_pertinence_flag
+               le.pertinence as llm_review_pertinence_flag,
+               rr.review,
+               rr.recommendationid as recommendation_ID,
+               ROUND(rr.weighted_vote_score,1) as weighted_vote_score,
+               rr.author_steamid as author_ID
         FROM raw_reviews rr
         JOIN llm_enrichment le ON rr.recommendationid = le.recommendationid
     """
-    return conn.execute(query).df()
+    
+    df = conn.execute(query).df()
+    df["date_created"] = df["date_created"].dt.date  # Convert date_created to pure date
+    df["date_updated"] = df["date_updated"].dt.date  # Convert date_created to pure date
+    return df
 
 data = load_full_data()  # Charge toute la table
 
-st.title("Steam Reviews Analytics")
+st.title("🍕 Steam Reviews Analytics")
 st.markdown(
     """
 Ce tableau fournit une analyse approfondie des avis utilisateurs sur Steam, enrichis avec les capacités d'Azure OpenAI.
@@ -97,22 +101,23 @@ Le dépôt complet est disponible ici : [repository GitHub](https://github.com/C
 
 
 
-# Exemple de tableau interactif avec filtres
+# Tableau interactif avec filtres amélioré
 def filtered_reviews_table(data):
     st.subheader("Tableau des avis")
     
-
                 # Ajouter des widgets pour le filtrage dynamique
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3,col4 = st.columns(4)
     with col1:
-        bug_reported = st.checkbox("Afficher seulement les avis avec des bugs signalés")
+        bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
     with col2:
-        recommend_only = st.checkbox("Afficher seulement les avis recommandés")
+        recommend_only = st.checkbox("Avis positifs uniquement")
     with col3:
-        purchased_only = st.checkbox("Uniquement les reviews qui ont acheté le jeu")
+        purchased_only = st.checkbox("Avis avec achat uniquement")
+    with col4:
+        reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
 
 
-                # Filtrage des données
+# Filtrage des données
     filtered_data = data
     if bug_reported:
         filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
@@ -120,18 +125,40 @@ def filtered_reviews_table(data):
         filtered_data = filtered_data[filtered_data["recommend_the_game"] == True]
     if purchased_only:
         filtered_data = filtered_data[filtered_data["received_for_free"] == False]
+    if reviewer_catalog:
+        filtered_data = filtered_data[filtered_data["author_num_games_owned"] >= 1]
 
-    # Cartes de métriques
+# Cartes de métriques
     total_reviews = len(filtered_data)
     recommended_count = (filtered_data["recommend_the_game"] == True).sum()
-    recommend_percent = (recommended_count / total_reviews) if total_reviews > 0 else 0
+    recommend_percent = (recommended_count / total_reviews *100 ) if total_reviews > 0 else 0
 
     m1, m2 = st.columns(2)
     with m1:
-        st.metric("Review count", value=f"{total_reviews:,}")
+        st.metric("Nombre d'avis", value=f"{total_reviews:,}")
     with m2:
-        st.metric("Review percent", value=f"{recommend_percent:.1%}")
+        st.metric("Pourcentage recommandé", value=f"{recommend_percent:.1f}%")
 
-    st.dataframe(filtered_data, use_container_width=True)
+    # Bar chart empilé: avis par date et recommandation
+    st.subheader("Évolution des avis par date et recommandation")
+    time_grain = st.selectbox("Granularité temporelle", options=["Mois","Jour"], index=1)
+    time_unit = "yearmonth" if time_grain == "Mois" else "yearmonthdate"
+
+    chart = alt.Chart(filtered_data).mark_bar().encode(
+        x=alt.X(f"{time_unit}(date_created):T", title="Date"),
+        y=alt.Y("count():Q", title="Nombre d'avis"),
+        color=alt.Color("recommend_the_game:N", title="Recommande le jeu")
+    ).properties(width=900, height=350)
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # Affichage du tableau
+    st.dataframe(
+        filtered_data.sort_values(by="date_updated", ascending=False),
+        use_container_width=True,
+        height=800,
+        hide_index=True
+    )
 
 filtered_reviews_table(data)
+
