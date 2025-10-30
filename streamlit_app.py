@@ -3,6 +3,7 @@ import duckdb
 import streamlit as st
 import altair as alt
 import pandas as pd
+import re
 from dotenv import load_dotenv
 load_dotenv() 
 
@@ -103,16 +104,76 @@ Le dépôt complet est disponible ici : [repository GitHub](https://github.com/C
 
 # Carte "Nombre de reviews" avec courbe de tendance en fond dans la première colonne
 cols_top = st.columns(6)
+# Sidebar : filters
+with st.sidebar:
+    st.header("Chart parameters ⚙️")
+    bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
+    recommend_only = st.checkbox("Avis positifs uniquement")
+    purchased_only = st.checkbox("Avis avec achat uniquement")
+    reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
+
+    # Filtres supplémentaires
+    languages = sorted([str(x) for x in data["language"].dropna().unique().tolist()])
+    selected_languages = st.multiselect("Langue (multi)", options=languages)
+    emotions = sorted([str(x) for x in data["llm_emotion"].dropna().unique().tolist()])
+    selected_emotions = st.multiselect("Émotion (multi)", options=emotions)
+
+    st.divider()
+    st.subheader("LLM")
+
+    sarcasm_only = st.checkbox("Sarcasme uniquement (llm_sarcasm_flag)")
+    humor_only = st.checkbox("Humour uniquement (llm_humor_flag)")
+    bug_llm_only = st.checkbox("Bug signalé uniquement (llm_bug_reported_flag)")
+
+    # Tags de fonctionnalités demandées
+    feature_values = data["llm_feature_requested_tag"].dropna().astype(str)
+    feature_tokens = sorted({tok.strip() for s in feature_values for tok in s.split(",") if tok.strip()})
+    selected_feature_tags = st.multiselect("Feature request tags", options=feature_tokens)
+
+
+
+# Appliquer les filtres globalement
+filtered_data = data
+# Filtres généraux
+if bug_reported:
+    filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
+if recommend_only:
+    filtered_data = filtered_data[filtered_data["recommend_the_game"] == True]
+if purchased_only:
+    filtered_data = filtered_data[filtered_data["received_for_free"] == False]
+if reviewer_catalog:
+    filtered_data = filtered_data[filtered_data["author_num_games_owned"] >= 1]
+
+# Filtres supplémentaires
+if selected_languages:
+    filtered_data = filtered_data[filtered_data["language"].isin(selected_languages)]
+if selected_emotions:
+    filtered_data = filtered_data[filtered_data["llm_emotion"].isin(selected_emotions)]
+if sarcasm_only:
+    filtered_data = filtered_data[filtered_data["llm_sarcasm_flag"] == True]
+if humor_only:
+    filtered_data = filtered_data[filtered_data["llm_humor_flag"] == True]
+if bug_llm_only:
+    filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
+
+if selected_feature_tags:
+    col = filtered_data["llm_feature_requested_tag"].fillna("").astype(str)
+    mask = pd.Series(False, index=filtered_data.index)
+    for t in selected_feature_tags:
+        mask = mask | col.str.contains(re.escape(t), case=False, na=False)
+    filtered_data = filtered_data[mask]
+
+
 with cols_top[0]:
     st.subheader("Nombre de reviews")
     trend_df = (
-        data.groupby("date_created").size().reset_index(name="count").sort_values("date_created")
+        filtered_data.groupby("date_created").size().reset_index(name="count").sort_values("date_created")
     )
 
     if not trend_df.empty:
         max_count = int(trend_df["count"].max())
         label_df = pd.DataFrame({
-            "label": [f"{len(data):,}"],
+            "label": [f"{len(filtered_data):,}"],
             "label_x": [trend_df["date_created"].min()],
             "label_y": [max_count * 0.95]
         })
@@ -136,18 +197,18 @@ with cols_top[0]:
         card = (area + line + label).properties(height=120)
         st.altair_chart(card, use_container_width=True)
     else:
-        st.metric("Nombre de reviews", value=f"{len(data):,}")
+        st.metric("Nombre de reviews", value=f"{len(filtered_data):,}")
 
 with cols_top[1]:
     st.subheader("% recommandé")
     rec_trend_df = (
-        data.groupby("date_created").agg(
+        filtered_data.groupby("date_created").agg(
             total=("recommend_the_game", "size"),
             recommended=("recommend_the_game", "sum")
         ).reset_index().sort_values("date_created")
     )
 
-    percent_total = ((data["recommend_the_game"] == True).sum() / len(data) * 100) if len(data) > 0 else 0
+    percent_total = ((filtered_data["recommend_the_game"] == True).sum() / len(filtered_data) * 100) if len(filtered_data) > 0 else 0
 
     if not rec_trend_df.empty:
         rec_trend_df["percent"] = rec_trend_df["recommended"] / rec_trend_df["total"] * 100
@@ -185,31 +246,9 @@ with cols_top[1]:
 
 
 # Tableau interactif avec filtres amélioré
-def filtered_reviews_table(data):
+def filtered_reviews_table(filtered_data):
     st.subheader("Tableau des avis")
-    
-                # Ajouter des widgets pour le filtrage dynamique
-    col1, col2, col3,col4 = st.columns(4)
-    with col1:
-        bug_reported = st.checkbox("Avis avec bugs signalés uniquement")
-    with col2:
-        recommend_only = st.checkbox("Avis positifs uniquement")
-    with col3:
-        purchased_only = st.checkbox("Avis avec achat uniquement")
-    with col4:
-        reviewer_catalog = st.checkbox("Reviewer posséde d'autres jeux")
 
-
-# Filtrage des données
-    filtered_data = data
-    if bug_reported:
-        filtered_data = filtered_data[filtered_data["llm_bug_reported_flag"] == True]
-    if recommend_only:
-        filtered_data = filtered_data[filtered_data["recommend_the_game"] == True]
-    if purchased_only:
-        filtered_data = filtered_data[filtered_data["received_for_free"] == False]
-    if reviewer_catalog:
-        filtered_data = filtered_data[filtered_data["author_num_games_owned"] >= 1]
 
 # Cartes de métriques
     total_reviews = len(filtered_data)
@@ -277,5 +316,5 @@ def filtered_reviews_table(data):
     )
 
 
-filtered_reviews_table(data)
+filtered_reviews_table(filtered_data)
 
