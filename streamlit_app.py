@@ -13,7 +13,7 @@ st.set_page_config(page_title="Steam Reviews Analytics", layout="wide")
 # Vérifier le token MotherDuck
 token = os.getenv("MOTHERDUCK_TOKEN")
 if not token:
-    st.error("MOTHERDUCK_TOKEN manquant. Définissez-le comme variable ou secret.")
+    st.error("Missing MOTHERDUCK_TOKEN. Set it as an environment variable or secret.")
     st.stop()
 
 # Connexion à MotherDuck
@@ -97,11 +97,11 @@ data = load_full_data()  # Charge toute la table
 st.title("🍕 Steam Reviews Analytics")
 st.markdown(
     """
-Ce tableau fournit une analyse approfondie des avis utilisateurs sur Steam, enrichis avec les capacités d'Azure OpenAI.
+This dashboard provides an in-depth analysis of Steam user reviews for [Pizza Deathlivery](https://store.steampowered.com/app/3697560/Pizza_Deathlivery/).
 
-Les retours Steam sont extraits et mis à jour automatiquement chaque heure, stockés et analysés dans une base de données MotherDuck.
+Steam reviews are ingested and updated hourly.
 
-Le dépôt complet est disponible ici : [repository GitHub](https://github.com/ChrisOlv/DE_steam_review_pipeline_analysis).
+Source code is here: [GitHub repository](https://github.com/ChrisOlv/DE_steam_review_pipeline_analysis).
     """
 )
 
@@ -194,23 +194,23 @@ with st.sidebar:
     default=[]
     )
     st.divider()
-    st.subheader("Filtres LLM")
+    st.subheader("LLM Filters")
 
     # Scores
     sentiment_min, sentiment_max = st.slider(
-        "Score de sentiment (LLM)", 0.0, 1.0, (0.0, 1.0), 0.01
+        "Sentiment score", 0.0, 1.0, (0.0, 1.0), 0.01
     )
     tox_min, tox_max = st.slider(
-        "Score de toxicité (LLM)", 0.0, 1.0, (0.0, 1.0), 0.01
+        "Toxicity score", 0.0, 1.0, (0.0, 1.0), 0.01
     )
 
     # Drapeaux LLM
-    only_feature_req = st.checkbox("Inclure uniquement les demandes de fonctionnalités (LLM)")
-    only_pertinent = st.checkbox("Avis jugés pertinents (LLM)")
-    exclude_spam = st.checkbox("Exclure les avis flaggés spam (LLM)")
+    only_feature_req = st.checkbox("Include only feature requests (LLM)")
+    only_pertinent = st.checkbox("Reviews flagged as pertinent (LLM)")
+    exclude_spam = st.checkbox("Exclude reviews flagged as spam (LLM)")
 
     # Recherche texte
-    search_query = st.text_input("Recherche texte (original + traduit)")
+    search_query = st.text_input("Text search (original + translated)")
 
     # Espace export
     st.divider()
@@ -267,11 +267,11 @@ if search_query:
 
 # Afficher le nombre de lignes et proposer l'export (dans la sidebar)
 with st.sidebar:
-    st.metric("Lignes filtrées", value=f"{len(filtered_data):,}")
+    st.metric("Filtered rows", value=f"{len(filtered_data):,}")
     csv_bytes = filtered_data.to_csv(index=False).encode("utf-8", "ignore")
-    st.download_button("Télécharger CSV", data=csv_bytes, file_name="steam_reviews_filtered.csv", mime="text/csv")
+    st.download_button("Download CSV", data=csv_bytes, file_name="steam_reviews_filtered.csv", mime="text/csv")
     jsonl_str = filtered_data.to_json(orient="records", lines=True, force_ascii=False)
-    st.download_button("Télécharger JSONL", data=jsonl_str, file_name="steam_reviews_filtered.jsonl", mime="application/json")
+    st.download_button("Download JSONL", data=jsonl_str, file_name="steam_reviews_filtered.jsonl", mime="application/json")
 
 
 with cols_top[0]:
@@ -307,10 +307,10 @@ with cols_top[0]:
         card = (area + line + label).properties(height=120)
         st.altair_chart(card, use_container_width=True)
     else:
-        st.metric("Nombre de reviews", value=f"{len(filtered_data):,}")
+        st.metric("Number of reviews", value=f"{len(filtered_data):,}")
 
 with cols_top[1]:
-    st.subheader("% reco")
+    st.subheader("Reco %")
     rec_trend_df = (
         filtered_data.groupby("date_created").agg(
             total=("recommend_the_game", "size"),
@@ -348,7 +348,7 @@ with cols_top[1]:
         card2 = (area + line + label).properties(height=120)
         st.altair_chart(card2, use_container_width=True)
     else:
-        st.metric("Pourcentage recommandé", value=f"{percent_total:.1f}%")
+        st.metric("Recommended percentage", value=f"{percent_total:.1f}%")
 
 
 
@@ -374,11 +374,11 @@ def filtered_reviews_table(filtered_data):
     #     st.metric("Pourcentage recommandé", value=f"{recommend_percent:.1f}%")
 
             # Bar chart empilé: avis par date et recommandation + à droite: répartition par émotion
-    st.subheader("Évolution des avis par date et recommandation")
+    st.subheader("Reviews over time by recommendation")
     col_chart, col_emotion = st.columns([2, 1])
 
     with col_chart:
-        st.subheader("Timeserie des avis")
+        st.subheader("Review time series")
         time_grain = st.radio(
             "Granularité (affichage)",
             options=["Jour","Mois"],
@@ -461,7 +461,7 @@ def filtered_reviews_table(filtered_data):
 
 
     with col_emotion:
-        st.subheader("Répartition des avis par émotion")
+        st.subheader("Reviews by emotion")
         # Palette pastel étendue pour couvrir plus d'émotions, et fallback cyclique
         emotion_palette = {
             "joy": "#A6D8A8",
@@ -513,12 +513,12 @@ def filtered_reviews_table(filtered_data):
         st.altair_chart((bars + labels).properties(height=max(280, 28*len(emo_df))), use_container_width=True)
 
 
-    st.subheader("Thématiques et qualité perçue")
-    st.caption("Barres: issues de la colonne `llm_themes`, `llm_pros`, `llm_cons` (LLM).")
+    st.subheader("Themes and perceived quality")
+    st.caption("Bars: derived from `llm_themes`, `llm_pros`, `llm_cons'.")
     g1, g2, g3 = st.columns([2, 2, 2])
 
     with g1:
-        st.caption("Top thèmes (LLM)")
+        st.caption("Top themes (LLM)")
         themes_counts = _explode_counts(filtered_data, "llm_themes", top_n=12)
         if not themes_counts.empty:
             row_count = len(themes_counts)
@@ -537,10 +537,10 @@ def filtered_reviews_table(filtered_data):
             )
             st.altair_chart((chart_themes + labels).properties(height=chart_height), use_container_width=True)
         else:
-            st.info("Aucun thème détecté dans la sélection.")
+            st.info("No theme found in selection.")
 
     with g2:
-        st.caption("Top Pros (LLM)")
+        st.caption("Top pros (LLM)")
         pros_counts = _explode_counts(filtered_data, "llm_pros", top_n=12)
         if not pros_counts.empty:
             row_count = len(pros_counts)
@@ -559,10 +559,10 @@ def filtered_reviews_table(filtered_data):
             )
             st.altair_chart((chart_pros + labels).properties(height=chart_height), use_container_width=True)
         else:
-            st.info("Aucun pro détecté dans la sélection.")
+            st.info("No pro found in selection.")
 
     with g3:
-        st.caption("Top Cons (LLM)")
+        st.caption("Top cons (LLM)")
         cons_counts = _explode_counts(filtered_data, "llm_cons", top_n=12)
         if not cons_counts.empty:
             row_count = len(cons_counts)
@@ -581,10 +581,10 @@ def filtered_reviews_table(filtered_data):
             )
             st.altair_chart((chart_cons + labels).properties(height=chart_height), use_container_width=True)
         else:
-            st.info("Aucun inconvénient détecté dans la sélection.")
+            st.info("No con found in selection.")
 
-    st.subheader("Tableau des avis")
-    st.markdown("**Sélectionnez un avis dans le tableau pour voir les détails ci-dessous.**")
+    st.subheader("Reviews table")
+    st.markdown("**Select a review in the table to see details below.**")
         # Affichage du tableau (avec word-wrap sur le texte traduit)
         # Préparer affichage avec wrap multi-lignes sur la colonne 'Avis traduit'
     display_df = filtered_data.copy()
@@ -644,7 +644,7 @@ def filtered_reviews_table(filtered_data):
 
     # Panneau de détail
     st.markdown("---")
-    st.subheader("Détails de l'avis")
+    st.subheader("Review details")
     row = None
     rid = st.session_state.get("selected_rid")
     if rid is not None and len(sorted_df):
@@ -693,29 +693,29 @@ def filtered_reviews_table(filtered_data):
                 return ""
             return ", ".join(sorted(set([str(v) for v in vals])))
 
-        with st.expander("Mots-clés et thématiques", expanded=True):
-            st.markdown(f"**Thèmes:** {_to_tags(row.get('llm_themes'))}")
-            st.markdown(f"**Mots-clés:** {_to_tags(row.get('llm_keywords'))}")
+        with st.expander("Keywords and themes", expanded=True):
+            st.markdown(f"**Themes:** {_to_tags(row.get('llm_themes'))}")
+            st.markdown(f"**Keywords:** {_to_tags(row.get('llm_keywords'))}")
             if pd.notna(row.get("llm_pros", None)) and str(row.get("llm_pros")) != "":
                 st.markdown(f"**Pros:** {row.get('llm_pros')}")
             if pd.notna(row.get("llm_cons", None)) and str(row.get("llm_cons")) != "":
                 st.markdown(f"**Cons:** {row.get('llm_cons')}")
 
-        with st.expander("Métadonnées", expanded=True):
+        with st.expander("Metadata", expanded=True):
             meta_cols = st.columns(2)
             with meta_cols[0]:
-                st.markdown(f"- Langue: `{row['language']}`")
-                st.markdown(f"- Créé: `{row['date_created']}`")
-                st.markdown(f"- Mis à jour: `{row['date_updated']}`")
-                st.markdown(f"- Recommandé: `{bool(row['recommend_the_game'])}`")
-                st.markdown(f"- Jeux possédés (auteur): `{row.get('author_num_games_owned', '')}`")
+                st.markdown(f"- Language: `{row['language']}`")
+                st.markdown(f"- Created: `{row['date_created']}`")
+                st.markdown(f"- Updated: `{row['date_updated']}`")
+                st.markdown(f"- Recommended: `{bool(row['recommend_the_game'])}`")
+                st.markdown(f"- Games owned (author): `{row.get('author_num_games_owned', '')}`")
             with meta_cols[1]:
-                st.markdown(f"- Votes +: `{row['count_review_liked']}`")
+                st.markdown(f"- Upvotes: `{row['count_review_liked']}`")
                 st.markdown(f"- Funny: `{row['count_review_marked_funny']}`")
-                st.markdown(f"- Toxicité: `{row.get('llm_toxicity_score', 0)}`")
+                st.markdown(f"- Toxicity: `{row.get('llm_toxicity_score', 0)}`")
                 st.markdown(f"- NPS: `{row.get('llm_NPS', '')}`")
-                st.markdown(f"- Avis (auteur): `{row.get('author_num_reviews', '')}`")
-            st.markdown(f"- Temps de jeu total (auteur): `{row.get('author_playtime_forever', '')}`")
+                st.markdown(f"- Reviews (author): `{row.get('author_num_reviews', '')}`")
+            st.markdown(f"- Total playtime (author): `{row.get('author_playtime_forever', '')}`")
 
 
 
