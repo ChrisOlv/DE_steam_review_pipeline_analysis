@@ -1,6 +1,6 @@
 # Steam Review Analysis Pipeline
 
-This repository contains a pipeline for ingesting, enriching, and analyzing Steam game reviews using Azure OpenAI and DuckDB. The pipeline is orchestrated using GitHub Actions to automate the process every four hours.
+This repository contains a pipeline for ingesting, enriching, and analyzing Steam game reviews using Azure OpenAI and DuckDB. The pipeline is orchestrated using GitHub Actions to automate the process every hour.
 
 ## Table of Contents
 
@@ -64,9 +64,8 @@ This repository contains a pipeline for ingesting, enriching, and analyzing Stea
    MD_DB_NAME=<your_database_name>  # Optional, defaults to steam_analytics
    ```
 
-## dataviz (temporary)
-Download and install Power BI (https://www.microsoft.com/fr-fr/download/details.aspx?id=58494)
-You will need to use your Github token and email adress in order to connect to source files
+## dataviz
+Dashboard is hosted on Streamlit : https://analytics-deathliver.streamlit.app/
 
 
 ## GitHub Actions
