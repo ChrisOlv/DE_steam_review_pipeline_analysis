@@ -42,6 +42,9 @@ jobs:
         shell: bash
         env:
           SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
+          SQL_SERVER_SERVER: ${{ secrets.SQL_SERVER_SERVER }}
+          SQL_SERVER_USER: ${{ secrets.SQL_SERVER_USER }}
+          SQL_SCHEMA: ${{ secrets.SQL_SCHEMA }}
         run: |
           set -euo pipefail
           echo "Starting Steam ingestion at $(date -u)"
@@ -83,6 +86,9 @@ jobs:
         shell: bash
         env:
           SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
+          SQL_SERVER_SERVER: ${{ secrets.SQL_SERVER_SERVER }}
+          SQL_SERVER_USER: ${{ secrets.SQL_SERVER_USER }}
+          SQL_SCHEMA: ${{ secrets.SQL_SCHEMA }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
@@ -95,44 +101,3 @@ jobs:
             --log-level "${LOG_LEVEL}"
           echo "Finished enrichment at $(date -u)"
 
-      - name: Clean dataviz outputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f dataviz/*.parquet dataviz/*.json dataviz/*.csv || true
-
-      - name: Export data as parquet
-        shell: bash
-        env:
-          SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "Exporting databases to parquet at $(date -u)"
-          python export_dataviz.py \
-            --out-dir "dataviz" \
-            --log-level "${LOG_LEVEL}"
-          echo "Export complete at $(date -u)"
-
-      - name: Commit and push dataviz outputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dataviz/*.parquet dataviz/*.json dataviz/*.csv || true
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update dataviz exports [skip ci]"
-            git push
-          fi
-
-      - name: Upload dataviz artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dataviz-parquet
-          path: |
-            dataviz/*.parquet
-            dataviz/*.json
-            dataviz/*.csv
-          if-no-files-found: warn
