@@ -13,6 +13,41 @@ from prompts import get_sentiment_prompt, get_summary_prompt, get_keywords_and_t
 
 load_dotenv()
 
+# Whitelist des colonnes autorisées pour prévenir l'injection SQL
+ALLOWED_LLM_ENRICHMENT_COLUMNS = {
+    "recommendationid", "sentiment_label", "sentiment_score", "summary_10_words",
+    "tl_dr", "keywords", "themes", "pros", "cons", "aspect_scores", "feature_requests",
+    "language_detected", "normalized_text_en", "quote_highlight", "toxicity_score",
+    "sarcasm_flag", "humor_flag", "spam_flag", "coherence_score", "bug_report",
+    "bug_type", "steps_hint", "feature_request", "requested_features", "suggestion_text",
+    "playtime_bucket", "reviewer_experience_level", "nps_category", "emotion_primary",
+    "pertinence"
+}
+
+def validate_column_name(col_name: str) -> str:
+    """Valide qu'un nom de colonne est dans la whitelist pour prévenir l'injection SQL."""
+    if col_name not in ALLOWED_LLM_ENRICHMENT_COLUMNS:
+        raise ValueError(f"Invalid column name: {col_name}. Column not in whitelist.")
+    return col_name
+
+# Whitelist des types de colonnes autorisés
+ALLOWED_COLUMN_TYPES = {"NVARCHAR(MAX)", "NVARCHAR(20)", "NVARCHAR(10)", "NVARCHAR(50)", "FLOAT", "BIT"}
+
+def validate_column_type(col_type: str) -> str:
+    """Valide qu'un type de colonne est dans la whitelist pour prévenir l'injection SQL."""
+    if col_type not in ALLOWED_COLUMN_TYPES:
+        raise ValueError(f"Invalid column type: {col_type}. Type not in whitelist.")
+    return col_type
+
+# Whitelist des noms de tables autorisés
+ALLOWED_TABLE_NAMES = {"llm_enrichment"}
+
+def validate_table_name(table_name: str) -> str:
+    """Valide qu'un nom de table est dans la whitelist pour prévenir l'injection SQL."""
+    if table_name not in ALLOWED_TABLE_NAMES:
+        raise ValueError(f"Invalid table name: {table_name}. Table not in whitelist.")
+    return table_name
+
 # Schema SQL Server - types adaptés
 SCHEMA_SQL = """
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='llm_enrichment' AND xtype='U')
@@ -611,8 +646,10 @@ def insert_enrichment(
             "emotion_primary",
             "pertinence",
         ]
-        placeholders = ", ".join(["%s"] * len(columns))
-        sql = f"INSERT INTO llm_enrichment ({', '.join(columns)}) VALUES ({placeholders})"
+        # Valider toutes les colonnes avant utilisation
+        validated_columns = [validate_column_name(col) for col in columns]
+        placeholders = ", ".join(["%s"] * len(validated_columns))
+        sql = f"INSERT INTO llm_enrichment ({', '.join(validated_columns)}) VALUES ({placeholders})"
         params = (
             rec_id,
             label,
@@ -712,7 +749,9 @@ def insert_enrichment(
                 "emotion_primary",
                 "pertinence",
             ]
-            set_clause = ", ".join([f"{c} = %s" for c in upd_cols])
+            # Valider toutes les colonnes avant utilisation
+            validated_cols = [validate_column_name(c) for c in upd_cols]
+            set_clause = ", ".join([f"{c} = %s" for c in validated_cols])
             sql = f"UPDATE llm_enrichment SET {set_clause} WHERE recommendationid = %s"
             params = (
                 label,
@@ -753,8 +792,10 @@ def insert_enrichment(
             updated_any = False
             for col_name, existing_val, new_val in cols:
                 if existing_val is None or (isinstance(existing_val, str) and existing_val == ""):
+                    # Valider le nom de colonne avant utilisation
+                    validated_col = validate_column_name(col_name)
                     cursor.execute(
-                        f"UPDATE llm_enrichment SET {col_name} = %s WHERE recommendationid = %s",
+                        f"UPDATE llm_enrichment SET {validated_col} = %s WHERE recommendationid = %s",
                         (new_val, rec_id)
                     )
                     updated_any = True
@@ -770,18 +811,24 @@ def insert_enrichment(
 
 def add_column_if_not_exists(conn: pymssql.Connection, table_name: str, column_name: str, column_type: str):
     """Ajoute une colonne à une table si elle n'existe pas déjà."""
+    # Valider les entrées pour prévenir l'injection SQL
+    validated_table = validate_table_name(table_name)
+    validated_column = validate_column_name(column_name)
+    validated_type = validate_column_type(column_type)
+    
     cursor = conn.cursor()
     # Vérifier si la colonne existe
     cursor.execute("""
         SELECT COUNT(*) 
         FROM sys.columns 
         WHERE object_id = OBJECT_ID(%s) AND name = %s
-    """, (table_name, column_name))
+    """, (validated_table, validated_column))
     exists = cursor.fetchone()[0] > 0
     
     if not exists:
         # Construire la requête ALTER TABLE (les noms de colonnes ne peuvent pas être paramétrés)
-        sql = f"ALTER TABLE {table_name} ADD {column_name} {column_type}"
+        # Mais on a validé toutes les valeurs avant
+        sql = f"ALTER TABLE {validated_table} ADD {validated_column} {validated_type}"
         cursor.execute(sql)
         conn.commit()
 
