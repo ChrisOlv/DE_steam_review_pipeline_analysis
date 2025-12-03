@@ -2,50 +2,53 @@ import os
 import json
 import argparse
 import logging
+import time
 from datetime import datetime
 from typing import Optional, List, Tuple
 
-import duckdb
+import pymssql
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from prompts import get_sentiment_prompt, get_summary_prompt, get_keywords_and_themes_prompt, get_pros_and_cons_prompt, get_aspect_scores_prompt, get_feature_requests_prompt, get_language_detected_prompt, get_quote_highlight_prompt, get_toxicity_prompt, get_tone_quality_flags_prompt, get_bug_info_prompt, get_feature_request_bonus_prompt, get_nps_and_emotion_prompt, get_playtime_bucket_prompt, get_reviewer_experience_prompt, get_pertinence_prompt
 
 load_dotenv()
 
+# Schema SQL Server - types adaptés
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS llm_enrichment (
-    recommendationid TEXT PRIMARY KEY,
-    sentiment_label TEXT,
-    sentiment_score DOUBLE,
-    summary_10_words TEXT,
-    tl_dr TEXT,
-    keywords TEXT,
-    themes TEXT,
-    pros TEXT,
-    cons TEXT,
-    aspect_scores TEXT,
-    feature_requests TEXT,
-    language_detected TEXT,
-    normalized_text_en TEXT,
-    -- Bonus set
-    quote_highlight TEXT,
-    toxicity_score DOUBLE,
-    sarcasm_flag BOOLEAN,
-    humor_flag BOOLEAN,
-    spam_flag BOOLEAN,
-    coherence_score DOUBLE,
-    bug_report BOOLEAN,
-    bug_type TEXT,
-    steps_hint TEXT,
-    feature_request BOOLEAN,
-    requested_features TEXT,
-    suggestion_text TEXT,
-    playtime_bucket TEXT,
-    reviewer_experience_level TEXT,
-    nps_category TEXT,
-    emotion_primary TEXT,
-    pertinence BOOLEAN
-);
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='llm_enrichment' AND xtype='U')
+    CREATE TABLE llm_enrichment (
+        recommendationid NVARCHAR(60) PRIMARY KEY,
+        sentiment_label NVARCHAR(20),
+        sentiment_score FLOAT,
+        summary_10_words NVARCHAR(MAX),
+        tl_dr NVARCHAR(MAX),
+        keywords NVARCHAR(MAX),
+        themes NVARCHAR(MAX),
+        pros NVARCHAR(MAX),
+        cons NVARCHAR(MAX),
+        aspect_scores NVARCHAR(MAX),
+        feature_requests NVARCHAR(MAX),
+        language_detected NVARCHAR(10),
+        normalized_text_en NVARCHAR(MAX),
+        -- Bonus set
+        quote_highlight NVARCHAR(MAX),
+        toxicity_score FLOAT,
+        sarcasm_flag BIT,
+        humor_flag BIT,
+        spam_flag BIT,
+        coherence_score FLOAT,
+        bug_report BIT,
+        bug_type NVARCHAR(20),
+        steps_hint NVARCHAR(MAX),
+        feature_request BIT,
+        requested_features NVARCHAR(MAX),
+        suggestion_text NVARCHAR(MAX),
+        playtime_bucket NVARCHAR(20),
+        reviewer_experience_level NVARCHAR(20),
+        nps_category NVARCHAR(20),
+        emotion_primary NVARCHAR(50),
+        pertinence BIT
+    );
 """
 
 
@@ -53,20 +56,59 @@ CREATE TABLE IF NOT EXISTS llm_enrichment (
 
 
 
-def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
-    token = os.getenv("MOTHERDUCK_TOKEN")
-    if not token:
-        raise RuntimeError("MOTHERDUCK_TOKEN is not set in environment or .env")
-    token = token.strip()
-    os.environ["MOTHERDUCK_TOKEN"] = token
-    try:
-        conn = duckdb.connect("md:")
-        conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
-        conn.execute(f"USE {db_name}")
-        return conn
-    except Exception as e:
-        logging.error(f"MotherDuck connection failed: {e}")
-        raise
+def connect_sql(max_retries: int = 3, retry_delay: float = 5.0) -> pymssql.Connection:
+    """
+    Connecte à SQL Server avec retry pour gérer les erreurs temporaires Azure.
+    """
+    password = os.getenv("SQL_SERVER_PASSWORD")
+    if not password:
+        raise RuntimeError("Définis SQL_SERVER_PASSWORD dans ton .env")
+    server = os.getenv("SQL_SERVER_SERVER")
+    if not server:
+        raise RuntimeError("Définis SQL_SERVER_SERVER dans ton .env")
+    user = os.getenv("SQL_SERVER_USER")
+    if not user:
+        raise RuntimeError("Définis SQL_SERVER_USER dans ton .env")
+    database = os.getenv("SQL_SCHEMA")
+    if not database:
+        raise RuntimeError("Définis SQL_SCHEMA dans ton .env")
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return pymssql.connect(
+                server=server,
+                user=user,
+                password=password,
+                database=database,
+                port=1433,
+                tds_version="7.4"
+            )
+        except Exception as e:
+            error_code = None
+            if hasattr(e, 'args') and len(e.args) > 0:
+                error_code = e.args[0]
+            
+            # Erreur 40613 = Database not currently available (Azure SQL)
+            # On retry pour toutes les erreurs de connexion si ce n'est pas la dernière tentative
+            is_retryable = (error_code == 40613 or 
+                          "connection" in str(e).lower() or 
+                          "not currently available" in str(e))
+            
+            if is_retryable and attempt < max_retries:
+                logging.warning(f"Tentative de connexion {attempt}/{max_retries} échouée: {e}")
+                logging.info(f"Réessai dans {retry_delay} secondes...")
+                time.sleep(retry_delay)
+                continue
+            # Si c'est la dernière tentative ou erreur non-retryable, on relance
+            raise
+    raise RuntimeError(f"Impossible de se connecter après {max_retries} tentatives")
+
+
+def init_schema(conn: pymssql.Connection):
+    """Initialise le schéma de la table llm_enrichment si elle n'existe pas."""
+    cursor = conn.cursor()
+    cursor.execute(SCHEMA_SQL)
+    conn.commit()
 
 
 def get_azure_client() -> AzureOpenAI:
@@ -448,9 +490,10 @@ def infer_reviewer_experience_level(client: AzureOpenAI, deployment: str, text: 
         return "régulier"
 
 
-def fetch_pending_reviews(conn: duckdb.DuckDBPyConnection, limit: int) -> List[Tuple[str, str]]:
-    rows = conn.execute("""
-        SELECT r.recommendationid, r.review
+def fetch_pending_reviews(conn: pymssql.Connection, limit: int) -> List[Tuple[str, str]]:
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT TOP (%s) r.recommendationid, r.review
         FROM raw_reviews r
         LEFT JOIN llm_enrichment e ON e.recommendationid = r.recommendationid
         WHERE r.review IS NOT NULL
@@ -487,15 +530,14 @@ def fetch_pending_reviews(conn: duckdb.DuckDBPyConnection, limit: int) -> List[T
             e.pertinence IS NULL
           )
         ORDER BY r.timestamp_created DESC
-        LIMIT ?
-    """, [limit]).fetchall()
-    return rows
+    """, (limit,))
+    return cursor.fetchall()
 
 
 
 
 def insert_enrichment(
-    conn: duckdb.DuckDBPyConnection,
+    conn: pymssql.Connection,
     rec_id: str,
     label: str,
     score: float,
@@ -529,10 +571,12 @@ def insert_enrichment(
     pertinence: bool,
     force: bool = False,
 ) -> str:
-    row = conn.execute(
-        "SELECT sentiment_label, sentiment_score, summary_10_words, tl_dr, keywords, themes, pros, cons, aspect_scores, feature_requests, language_detected, normalized_text_en, quote_highlight, toxicity_score, sarcasm_flag, humor_flag, spam_flag, coherence_score, bug_report, bug_type, steps_hint, feature_request, requested_features, suggestion_text, playtime_bucket, reviewer_experience_level, nps_category, emotion_primary, pertinence FROM llm_enrichment WHERE recommendationid = ?",
-        [rec_id]
-    ).fetchone()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT sentiment_label, sentiment_score, summary_10_words, tl_dr, keywords, themes, pros, cons, aspect_scores, feature_requests, language_detected, normalized_text_en, quote_highlight, toxicity_score, sarcasm_flag, humor_flag, spam_flag, coherence_score, bug_report, bug_type, steps_hint, feature_request, requested_features, suggestion_text, playtime_bucket, reviewer_experience_level, nps_category, emotion_primary, pertinence FROM llm_enrichment WHERE recommendationid = %s",
+        (rec_id,)
+    )
+    row = cursor.fetchone()
 
     if row is None:
         columns = [
@@ -567,9 +611,9 @@ def insert_enrichment(
             "emotion_primary",
             "pertinence",
         ]
-        placeholders = ", ".join(["?"] * len(columns))
+        placeholders = ", ".join(["%s"] * len(columns))
         sql = f"INSERT INTO llm_enrichment ({', '.join(columns)}) VALUES ({placeholders})"
-        params = [
+        params = (
             rec_id,
             label,
             score,
@@ -600,8 +644,9 @@ def insert_enrichment(
             nps_category,
             emotion_primary,
             pertinence,
-        ]
-        conn.execute(sql, params)
+        )
+        cursor.execute(sql, params)
+        conn.commit()
         return "inserted"
     else:
         cols = [
@@ -667,9 +712,9 @@ def insert_enrichment(
                 "emotion_primary",
                 "pertinence",
             ]
-            set_clause = ", ".join([f"{c} = ?" for c in upd_cols])
-            sql = f"UPDATE llm_enrichment SET {set_clause} WHERE recommendationid = ?"
-            params = [
+            set_clause = ", ".join([f"{c} = %s" for c in upd_cols])
+            sql = f"UPDATE llm_enrichment SET {set_clause} WHERE recommendationid = %s"
+            params = (
                 label,
                 score,
                 summary_10_words,
@@ -700,18 +745,21 @@ def insert_enrichment(
                 emotion_primary,
                 pertinence,
                 rec_id,
-            ]
-            conn.execute(sql, params)
+            )
+            cursor.execute(sql, params)
+            conn.commit()
             return "overwritten"
         else:
             updated_any = False
             for col_name, existing_val, new_val in cols:
                 if existing_val is None or (isinstance(existing_val, str) and existing_val == ""):
-                    conn.execute(
-                        f"UPDATE llm_enrichment SET {col_name} = ? WHERE recommendationid = ?",
-                        [new_val, rec_id]
+                    cursor.execute(
+                        f"UPDATE llm_enrichment SET {col_name} = %s WHERE recommendationid = %s",
+                        (new_val, rec_id)
                     )
                     updated_any = True
+            if updated_any:
+                conn.commit()
             return "updated" if updated_any else "skipped"
 
 
@@ -720,53 +768,68 @@ def insert_enrichment(
 
 
 
+def add_column_if_not_exists(conn: pymssql.Connection, table_name: str, column_name: str, column_type: str):
+    """Ajoute une colonne à une table si elle n'existe pas déjà."""
+    cursor = conn.cursor()
+    # Vérifier si la colonne existe
+    cursor.execute("""
+        SELECT COUNT(*) 
+        FROM sys.columns 
+        WHERE object_id = OBJECT_ID(%s) AND name = %s
+    """, (table_name, column_name))
+    exists = cursor.fetchone()[0] > 0
+    
+    if not exists:
+        # Construire la requête ALTER TABLE (les noms de colonnes ne peuvent pas être paramétrés)
+        sql = f"ALTER TABLE {table_name} ADD {column_name} {column_type}"
+        cursor.execute(sql)
+        conn.commit()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Enrich raw_reviews with core LLM indicators using Azure OpenAI.")
-    parser.add_argument("--db-name", default=os.getenv("MD_DB_NAME", "steam_analytics"), help="MotherDuck DB name")
     parser.add_argument("--limit", type=int, default=50, help="Max number of reviews to classify this run")
     parser.add_argument("--force", action="store_true", help="Overwrite existing sentiment_label if already set")
-
-    
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
-    conn = connect_motherduck(args.db_name)
-    conn.execute(SCHEMA_SQL)
+    conn = connect_sql()
+    init_schema(conn)
 
-            # Ensure all core-set and bonus-set columns exist for older tables
+    # Ensure all core-set and bonus-set columns exist for older tables
     try:
         # core
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS sentiment_score DOUBLE")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS summary_10_words TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS tl_dr TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS keywords TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS themes TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS pros TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS cons TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS aspect_scores TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS feature_requests TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS language_detected TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS normalized_text_en TEXT")
+        add_column_if_not_exists(conn, "llm_enrichment", "sentiment_score", "FLOAT")
+        add_column_if_not_exists(conn, "llm_enrichment", "summary_10_words", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "tl_dr", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "keywords", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "themes", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "pros", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "cons", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "aspect_scores", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "feature_requests", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "language_detected", "NVARCHAR(10)")
+        add_column_if_not_exists(conn, "llm_enrichment", "normalized_text_en", "NVARCHAR(MAX)")
         # bonus
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS quote_highlight TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS toxicity_score DOUBLE")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS sarcasm_flag BOOLEAN")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS humor_flag BOOLEAN")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS spam_flag BOOLEAN")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS coherence_score DOUBLE")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS bug_report BOOLEAN")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS bug_type TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS steps_hint TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS feature_request BOOLEAN")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS requested_features TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS suggestion_text TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS playtime_bucket TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS reviewer_experience_level TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS nps_category TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS emotion_primary TEXT")
-        conn.execute("ALTER TABLE llm_enrichment ADD COLUMN IF NOT EXISTS pertinence BOOLEAN")
+        add_column_if_not_exists(conn, "llm_enrichment", "quote_highlight", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "toxicity_score", "FLOAT")
+        add_column_if_not_exists(conn, "llm_enrichment", "sarcasm_flag", "BIT")
+        add_column_if_not_exists(conn, "llm_enrichment", "humor_flag", "BIT")
+        add_column_if_not_exists(conn, "llm_enrichment", "spam_flag", "BIT")
+        add_column_if_not_exists(conn, "llm_enrichment", "coherence_score", "FLOAT")
+        add_column_if_not_exists(conn, "llm_enrichment", "bug_report", "BIT")
+        add_column_if_not_exists(conn, "llm_enrichment", "bug_type", "NVARCHAR(20)")
+        add_column_if_not_exists(conn, "llm_enrichment", "steps_hint", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "feature_request", "BIT")
+        add_column_if_not_exists(conn, "llm_enrichment", "requested_features", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "suggestion_text", "NVARCHAR(MAX)")
+        add_column_if_not_exists(conn, "llm_enrichment", "playtime_bucket", "NVARCHAR(20)")
+        add_column_if_not_exists(conn, "llm_enrichment", "reviewer_experience_level", "NVARCHAR(20)")
+        add_column_if_not_exists(conn, "llm_enrichment", "nps_category", "NVARCHAR(20)")
+        add_column_if_not_exists(conn, "llm_enrichment", "emotion_primary", "NVARCHAR(50)")
+        add_column_if_not_exists(conn, "llm_enrichment", "pertinence", "BIT")
     except Exception as e:
         logging.debug(f"Column migration step encountered an issue: {e}")
 
@@ -873,7 +936,11 @@ def main():
         if processed % 10 == 0:
             logging.info(f"Processed {processed}/{len(pending)} (ins:{inserted}, upd:{updated}, ovw:{overwritten}, skip:{skipped})")
 
-    print(f"Done. Classified {processed} reviews. Results: inserted={inserted}, updated={updated}, overwritten={overwritten}, skipped={skipped}. Total rows: {conn.execute('SELECT COUNT(*) FROM llm_enrichment').fetchone()[0]}")
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM llm_enrichment")
+    total_rows = cursor.fetchone()[0]
+    print(f"Done. Classified {processed} reviews. Results: inserted={inserted}, updated={updated}, overwritten={overwritten}, skipped={skipped}. Total rows: {total_rows}")
+    conn.close()
 
 
 if __name__ == "__main__":

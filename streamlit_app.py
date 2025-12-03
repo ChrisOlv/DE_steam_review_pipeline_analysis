@@ -1,5 +1,6 @@
 import os
-import duckdb
+import time
+import pymssql
 import streamlit as st
 import altair as alt
 import pandas as pd
@@ -10,19 +11,57 @@ load_dotenv()
 # Configurer la page Streamlit
 st.set_page_config(page_title="Steam Reviews Analytics", layout="wide")
 
-# Vérifier le token MotherDuck
-token = os.getenv("MOTHERDUCK_TOKEN")
-if not token:
-    st.error("Missing MOTHERDUCK_TOKEN. Set it as an environment variable or secret.")
-    st.stop()
-
-# Connexion à MotherDuck
+# Connexion à SQL Server
 @st.cache_resource
-def get_db_connection():
-    con = duckdb.connect("md:")
-    db_name = os.getenv("MD_DB_NAME", "steam_analytics")  # Nom de base de données par défaut
-    con.execute(f"USE {db_name}")
-    return con
+def get_db_connection(max_retries: int = 3, retry_delay: float = 5.0):
+    """
+    Connecte à SQL Server avec retry pour gérer les erreurs temporaires Azure.
+    """
+    password = os.getenv("SQL_SERVER_PASSWORD")
+    if not password:
+        st.error("Missing SQL_SERVER_PASSWORD. Set it as an environment variable or secret.")
+        st.stop()
+    
+    server = os.getenv("SQL_SERVER_SERVER")
+    if not server:
+        st.error("Missing SQL_SERVER_SERVER. Set it as an environment variable or secret.")
+        st.stop()
+    
+    user = os.getenv("SQL_SERVER_USER")
+    if not user:
+        st.error("Missing SQL_SERVER_USER. Set it as an environment variable or secret.")
+        st.stop()
+    
+    database = os.getenv("SQL_SCHEMA")
+    if not database:
+        st.error("Missing SQL_SCHEMA. Set it as an environment variable or secret.")
+        st.stop()
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return pymssql.connect(
+                server=server,
+                user=user,
+                password=password,
+                database=database,
+                port=1433,
+                tds_version="7.4"
+            )
+        except Exception as e:
+            error_code = None
+            if hasattr(e, 'args') and len(e.args) > 0:
+                error_code = e.args[0]
+            
+            # Erreur 40613 = Database not currently available (Azure SQL)
+            is_retryable = (error_code == 40613 or 
+                          "connection" in str(e).lower() or 
+                          "not currently available" in str(e))
+            
+            if is_retryable and attempt < max_retries:
+                time.sleep(retry_delay)
+                continue
+            raise
+    raise RuntimeError(f"Impossible de se connecter après {max_retries} tentatives")
 
 conn = get_db_connection()
 
@@ -31,8 +70,8 @@ conn = get_db_connection()
 def load_full_data():
     query = """
         SELECT 
-               CAST(TO_TIMESTAMP(rr.timestamp_created) AS DATE) AS date_created,
-               CAST(TO_TIMESTAMP(rr.timestamp_updated) AS DATE) AS date_updated,
+               CONVERT(DATE, DATEADD(SECOND, rr.timestamp_created, '1970-01-01')) AS date_created,
+               CONVERT(DATE, DATEADD(SECOND, rr.timestamp_updated, '1970-01-01')) AS date_updated,
                rr.language,
                rr.review as review,
                rr.voted_up as recommend_the_game,
@@ -76,16 +115,27 @@ def load_full_data():
                le.pertinence as llm_review_pertinence_flag,
                rr.recommendationid as recommendation_ID,
                le.normalized_text_en as llm_review_translated,
-               ROUND(rr.weighted_vote_score,1) as weighted_vote_score,
+               ROUND(rr.weighted_vote_score, 1) as weighted_vote_score,
                rr.author_steamid as author_ID
         FROM raw_reviews rr
-        JOIN llm_enrichment le ON rr.recommendationid = le.recommendationid
+        INNER JOIN llm_enrichment le ON rr.recommendationid = le.recommendationid
     """
     
-    df = conn.execute(query).df()
-    # convertion des datatypes
-    df["date_created"] = df["date_created"].dt.date  
-    df["date_updated"] = df["date_updated"].dt.date 
+    cursor = conn.cursor()
+    cursor.execute(query)
+    
+    # Récupérer les noms de colonnes
+    columns = [desc[0] for desc in cursor.description]
+    
+    # Récupérer toutes les lignes
+    rows = cursor.fetchall()
+    
+    # Créer le DataFrame pandas
+    df = pd.DataFrame(rows, columns=columns)
+    
+    # Conversion des datatypes
+    df["date_created"] = pd.to_datetime(df["date_created"]).dt.date  
+    df["date_updated"] = pd.to_datetime(df["date_updated"]).dt.date 
     df["Review"] = df.apply(
         lambda row: row["review"] if row["language"] in ["french", "english"] else row["llm_review_translated"], axis=1
     )

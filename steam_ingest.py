@@ -3,81 +3,122 @@ import logging
 import time
 import os
 import requests
-import duckdb
+import pymssql
 from dotenv import load_dotenv
 from typing import Dict, Iterator, Optional, List
 
 load_dotenv()  
 
 BASE_URL = "https://store.steampowered.com/appreviews/{app_id}"
-SOURCE = "steam_3697560"
 
-def connect_motherduck(db_name: str) -> duckdb.DuckDBPyConnection:
-    token = os.getenv("MOTHERDUCK_TOKEN")
-    if not token:
-        raise RuntimeError("MOTHERDUCK_TOKEN is not set in the environment or .env")
+def connect_sql(max_retries: int = 3, retry_delay: float = 5.0) -> pymssql.Connection:
+    """
+    Connecte à SQL Server avec retry pour gérer les erreurs temporaires Azure.
+    """
+    password = os.getenv("SQL_SERVER_PASSWORD")
+    if not password:
+        raise RuntimeError("Définis SQL_SERVER_PASSWORD dans ton .env")
+    server = os.getenv("SQL_SERVER_SERVER")
+    if not server:
+        raise RuntimeError("Définis SQL_SERVER_SERVER dans ton .env")
+    user = os.getenv("SQL_SERVER_USER")
+    if not user:
+        raise RuntimeError("Définis SQL_SERVER_USER dans ton .env")
+    database = os.getenv("SQL_SCHEMA")
+    if not database:
+        raise RuntimeError("Définis SQL_SCHEMA dans ton .env")
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return pymssql.connect(
+                server=server,
+                user=user,
+                password=password,
+                database=database,
+                port=1433,
+                tds_version="7.4"
+            )
+        except Exception as e:
+            error_code = None
+            if hasattr(e, 'args') and len(e.args) > 0:
+                error_code = e.args[0]
+            
+            # Erreur 40613 = Database not currently available (Azure SQL)
+            # On retry pour toutes les erreurs de connexion si ce n'est pas la dernière tentative
+            is_retryable = (error_code == 40613 or 
+                          "connection" in str(e).lower() or 
+                          "not currently available" in str(e))
+            
+            if is_retryable and attempt < max_retries:
+                logging.warning(f"Tentative de connexion {attempt}/{max_retries} échouée: {e}")
+                logging.info(f"Réessai dans {retry_delay} secondes...")
+                time.sleep(retry_delay)
+                continue
+            # Si c'est la dernière tentative ou erreur non-retryable, on relance
+            raise
+    raise RuntimeError(f"Impossible de se connecter après {max_retries} tentatives")
 
-    token = token.strip()  
-    os.environ["MOTHERDUCK_TOKEN"] = token
 
-    try:
-        conn = duckdb.connect("md:")  
-        conn.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
-        conn.execute(f"USE {db_name}")
-        return conn
-    except Exception as e:
-        logging.error(f"MotherDuck connection failed: {e}")
-        raise
 
-def init_schema(conn: duckdb.DuckDBPyConnection):
 
-    conn.execute(
+def init_schema(conn: pymssql.Connection):
+    cursor = conn.cursor()
+    cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS raw_reviews (
-            recommendationid TEXT,
-            author_steamid TEXT,
-            language TEXT,
-            review TEXT,
-            voted_up BOOLEAN,
-            votes_up INTEGER,
-            votes_funny INTEGER,
-            weighted_vote_score DOUBLE,
-            comment_count INTEGER,
-            steam_purchase BOOLEAN,
-            received_for_free BOOLEAN,
-            timestamp_created BIGINT,
-            timestamp_updated BIGINT,
-            playtime_at_review BIGINT,
-            playtime_forever BIGINT,
-            author_num_games_owned INTEGER,
-            author_num_reviews INTEGER,
-            author_playtime_forever BIGINT,
-            author_playtime_last_two_weeks BIGINT,
-            author_last_played BIGINT
-        );
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='raw_reviews' AND xtype='U')
+            CREATE TABLE raw_reviews (
+                recommendationid NVARCHAR(60) PRIMARY KEY,
+                author_steamid NVARCHAR(30),
+                language NVARCHAR(10),
+                review NVARCHAR(MAX),
+                voted_up BIT,
+                votes_up INT,
+                votes_funny INT,
+                weighted_vote_score FLOAT,
+                comment_count INT,
+                steam_purchase BIT,
+                received_for_free BIT,
+                timestamp_created BIGINT,
+                timestamp_updated BIGINT,
+                playtime_at_review BIGINT,
+                playtime_forever BIGINT,
+                author_num_games_owned INT,
+                author_num_reviews INT,
+                author_playtime_forever BIGINT,
+                author_playtime_last_two_weeks BIGINT,
+                author_last_played BIGINT
+            );
         """
     )
-    conn.execute(
+    cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS ingest_state (
-            source TEXT PRIMARY KEY,
-            last_review_ts BIGINT,
-            last_run_at TIMESTAMP
-        );
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='ingest_state' AND xtype='U')
+            CREATE TABLE ingest_state (
+                source NVARCHAR(100) PRIMARY KEY,
+                last_review_ts BIGINT,
+                last_run_at DATETIME2 DEFAULT SYSUTCDATETIME()
+            );
         """
     )
+    conn.commit()
 
-def get_last_ingest_ts(conn: duckdb.DuckDBPyConnection, source: str) -> Optional[int]:
-    res = conn.execute("SELECT last_review_ts FROM ingest_state WHERE source = ?", [source]).fetchone()
-    return res[0] if res else None
 
-def update_ingest_state(conn: duckdb.DuckDBPyConnection, source: str, last_ts: int):
+def get_last_ingest_ts(conn: pymssql.Connection, source: str) -> Optional[int]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_review_ts FROM ingest_state WHERE source = %s", (source,))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
-    existing = conn.execute("SELECT 1 FROM ingest_state WHERE source = ?", [source]).fetchone()
-    if existing:
-        conn.execute("UPDATE ingest_state SET last_review_ts = ?, last_run_at = NOW() WHERE source = ?", [last_ts, source])
+
+def update_ingest_state(conn: pymssql.Connection, source: str, last_ts: int):
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM ingest_state WHERE source = %s", (source,))
+    if cursor.fetchone():
+        cursor.execute("UPDATE ingest_state SET last_review_ts = %s, last_run_at = SYSUTCDATETIME() WHERE source = %s", (last_ts, source))
     else:
-        conn.execute("INSERT INTO ingest_state(source, last_review_ts, last_run_at) VALUES (?, ?, NOW())", [source, last_ts])
+        cursor.execute("INSERT INTO ingest_state (source, last_review_ts, last_run_at) VALUES (%s, %s, SYSUTCDATETIME())", (source, last_ts))
+    conn.commit()
+
 
 def fetch_reviews_paginated(
     app_id: int,
@@ -176,25 +217,37 @@ def normalize_review(rv: Dict) -> Dict:
     }
 
 UPSERT_SQL = """
-INSERT INTO raw_reviews
-SELECT
-    ? AS recommendationid, ? AS author_steamid, ? AS language, ? AS review,
-    ? AS voted_up, ? AS votes_up, ? AS votes_funny, ? AS weighted_vote_score,
-    ? AS comment_count, ? AS steam_purchase, ? AS received_for_free,
-    ? AS timestamp_created, ? AS timestamp_updated,
-    ? AS playtime_at_review, ? AS playtime_forever,
-    ? AS author_num_games_owned, ? AS author_num_reviews,
-    ? AS author_playtime_forever, ? AS author_playtime_last_two_weeks,
-    ? AS author_last_played
-WHERE NOT EXISTS (
-    SELECT 1 FROM raw_reviews WHERE recommendationid = ?
-);
+IF NOT EXISTS (SELECT 1 FROM raw_reviews WHERE recommendationid = %s)
+BEGIN
+    INSERT INTO raw_reviews (
+        recommendationid, author_steamid, language, review,
+        voted_up, votes_up, votes_funny, weighted_vote_score,
+        comment_count, steam_purchase, received_for_free,
+        timestamp_created, timestamp_updated,
+        playtime_at_review, playtime_forever,
+        author_num_games_owned, author_num_reviews,
+        author_playtime_forever, author_playtime_last_two_weeks,
+        author_last_played
+    )
+    VALUES (
+        %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s, %s,
+        %s, %s,
+        %s, %s,
+        %s, %s,
+        %s, %s,
+        %s
+    )
+END
 """
 
-def upsert_batch(conn: duckdb.DuckDBPyConnection, batch: List[Dict]) -> int:
+def upsert_batch(conn: pymssql.Connection, batch: List[Dict]) -> int:
+    cursor = conn.cursor()
     count = 0
     for r in batch:
-        params = [
+        params = (
+            r.get("recommendationid"),  # Pour le IF NOT EXISTS
             r.get("recommendationid"), r.get("author_steamid"), r.get("language"), r.get("review"),
             r.get("voted_up"), r.get("votes_up"), r.get("votes_funny"), r.get("weighted_vote_score"),
             r.get("comment_count"), r.get("steam_purchase"), r.get("received_for_free"),
@@ -202,15 +255,16 @@ def upsert_batch(conn: duckdb.DuckDBPyConnection, batch: List[Dict]) -> int:
             r.get("playtime_at_review"), r.get("playtime_forever"),
             r.get("author_num_games_owned"), r.get("author_num_reviews"),
             r.get("author_playtime_forever"), r.get("author_playtime_last_two_weeks"),
-            r.get("author_last_played"),
-            r.get("recommendationid"),
-        ]
-        conn.execute(UPSERT_SQL, params)
+            r.get("author_last_played")
+        )
+        cursor.execute(UPSERT_SQL, params)
         count += 1
+    conn.commit()
     return count
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Incremental ingest Steam reviews into MotherDuck.")
+    parser = argparse.ArgumentParser(description="Incremental ingest Steam reviews into Azure SQL.")
     parser.add_argument("--app-id", type=int, default=3697560, help="Steam App ID (default: 3697560)")
     parser.add_argument("--language", type=str, default="all", help="Review language filter (default: all)")
     parser.add_argument("--review-type", type=str, default="all", help="Review type filter (all/positive/negative)")
@@ -218,13 +272,13 @@ def main():
     parser.add_argument("--num-per-page", type=int, default=100, help="Number of reviews per page (max 100)")
     parser.add_argument("--max-pages", type=int, default=5, help="Max pages to fetch (default: 5)")
     parser.add_argument("--sleep", type=float, default=0.5, help="Sleep between pages in seconds")
-    parser.add_argument("--db-name", type=str, default=os.getenv("MD_DB_NAME", "steam_analytics"), help="MotherDuck DB name")
+    
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
-    conn = connect_motherduck(args.db_name)
+    conn = connect_sql()
     init_schema(conn)
 
     source = f"steam_{args.app_id}"

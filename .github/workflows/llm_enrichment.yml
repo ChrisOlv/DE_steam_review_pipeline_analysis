@@ -18,9 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    env:
-      MD_DB_NAME: ${{ secrets.MD_DB_NAME }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,18 +35,17 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           else
-            pip install python-dotenv duckdb requests
+            pip install python-dotenv pymssql requests
           fi
 
       - name: Run Steam Ingestion
         shell: bash
         env:
-          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
         run: |
           set -euo pipefail
           echo "Starting Steam ingestion at $(date -u)"
-          python steam_ingest.py \
-            --db-name "${MD_DB_NAME:-steam_analytics}"
+          python steam_ingest.py
           echo "Finished ingestion at $(date -u)"
 
   run-enrichment:
@@ -60,7 +56,6 @@ jobs:
 
     env:
       # Optional: set these if you want to override script defaults
-      MD_DB_NAME: ${{ secrets.MD_DB_NAME }}
       LOG_LEVEL: INFO
       LIMIT: "200"
 
@@ -81,13 +76,13 @@ jobs:
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           else
-            pip install duckdb python-dotenv openai
+            pip install pymssql python-dotenv openai
           fi
 
       - name: Run enrichment
         shell: bash
         env:
-          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
@@ -96,7 +91,6 @@ jobs:
           set -euo pipefail
           echo "Starting enrichment at $(date -u)"
           python enrich_sentiment.py \
-            --db-name "${MD_DB_NAME:-steam_analytics}" \
             --limit "${LIMIT}" \
             --log-level "${LOG_LEVEL}"
           echo "Finished enrichment at $(date -u)"
@@ -110,12 +104,11 @@ jobs:
       - name: Export data as parquet
         shell: bash
         env:
-          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SQL_SERVER_PASSWORD: ${{ secrets.SQL_SERVER_PASSWORD }}
         run: |
           set -euo pipefail
           echo "Exporting databases to parquet at $(date -u)"
           python export_dataviz.py \
-            --db-name "${MD_DB_NAME:-steam_analytics}" \
             --out-dir "dataviz" \
             --log-level "${LOG_LEVEL}"
           echo "Export complete at $(date -u)"
