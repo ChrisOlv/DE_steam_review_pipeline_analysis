@@ -47,6 +47,10 @@ jobs:
           SQL_SCHEMA: ${{ secrets.SQL_SCHEMA }}
         run: |
           set -euo pipefail
+          echo "Debug: SQL_SERVER_SERVER=${SQL_SERVER_SERVER:-(empty)}"
+          echo "Debug: SQL_SERVER_USER=${SQL_SERVER_USER:-(empty)}"
+          echo "Debug: SQL_SCHEMA=${SQL_SCHEMA:-(empty)}"
+          echo "Debug: SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD:+***set***}"
           echo "Starting Steam ingestion at $(date -u)"
           python steam_ingest.py
           echo "Finished ingestion at $(date -u)"
@@ -95,6 +99,10 @@ jobs:
           AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
         run: |
           set -euo pipefail
+          echo "Debug: SQL_SERVER_SERVER=${SQL_SERVER_SERVER:-(empty)}"
+          echo "Debug: SQL_SERVER_USER=${SQL_SERVER_USER:-(empty)}"
+          echo "Debug: SQL_SCHEMA=${SQL_SCHEMA:-(empty)}"
+          echo "Debug: SQL_SERVER_PASSWORD=${SQL_SERVER_PASSWORD:+***set***}"
           echo "Starting enrichment at $(date -u)"
           python enrich_sentiment.py \
             --limit "${LIMIT}" \
